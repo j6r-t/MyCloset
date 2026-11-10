@@ -68,7 +68,11 @@ Material Symbols Outlined, 22–24px, `ink-secondary`; active tab `ink`. Nav set
 6. **Outfits** — 2-column grid; first tile **"Create Fit"** (+ icon, dashed). Each outfit renders as a **vertical flat-lay column**: every garment its own cutout stacked top→bottom (top, bottom, shoes; outerwear/accessory appended), small 6px gaps, **never overlapping**, no card frame — on `bg`; name caption + date below the column.
 7. **Outfit builder** — live vertical flat-lay preview (same rendering as #6) + slot chips beneath (Dress OR Top+Bottom, Shoes, Outerwear, Accessory — tap chip → picker); harmony readout as a caption word ("Harmonious / Mixed / Clashing"); Save = black pill.
 8. **Suggestions** — top-3 as vertical flat-lay columns (same renderer), each with its reason caption ("Navy + mustard — complementary accents"); Shuffle icon regenerates; one-tap save.
-9. **Settings** — plain hairline list: Export backup, Restore, About. Minimal.
+9. **Settings** — plain hairline list: Theme (System/Light/Dark pills), Export backup, Restore, About. Minimal.
+
+### Component: NamedColorWheel (added 2026-11-10)
+
+Radial picker for the closed 36-color vocabulary, used from the details form: 28 chromatic colors as 44px swatches on a hue-ordered outer ring; 8 neutrals clustered on an inner ring around a 48px center disc showing the current selection. Press-drag summons an **offset color loupe** 80px above the finger (clamped to the wheel): 72px enlarged swatch + name caption, theme-aware hairline border + soft shadow; hovered swatch gets an ink ring; haptic tick per hover change; release commits, plain tap selects, cancel dismisses without committing. The sheet's drag-to-dismiss is disabled while the wheel is active.
 
 ## 7. Motion (quiet, unchanged policy)
 
