@@ -74,12 +74,22 @@ class MyClosetApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return AppStateScope(
       state: state,
-      child: MaterialApp(
-        title: 'MyCloset',
-        scaffoldMessengerKey: scaffoldMessengerKey,
-        // v2 ships a single light theme (design.md section 1).
-        theme: buildTheme(),
-        home: const AppShell(),
+      child: Builder(
+        builder: (scopeContext) {
+          // Depend on the AppStateScope notifier so a theme-mode change in
+          // Settings rebuilds the MaterialApp immediately.
+          final themeMode = AppStateScope.of(scopeContext).themeMode;
+          return MaterialApp(
+            title: 'MyCloset',
+            scaffoldMessengerKey: scaffoldMessengerKey,
+            // Light and dark share the Fitted-minimal identity; the user's
+            // choice (System / Light / Dark) persists in app_settings.
+            theme: buildTheme(Brightness.light),
+            darkTheme: buildTheme(Brightness.dark),
+            themeMode: themeMode,
+            home: const AppShell(),
+          );
+        },
       ),
     );
   }

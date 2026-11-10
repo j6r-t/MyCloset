@@ -18,7 +18,9 @@ import '../models/outfit.dart';
 // items.layer_type (docs/backend.md 2.1); SQLite cannot add a CHECK via
 // ALTER TABLE, so migrated databases have the layer_type CHECK enforced at
 // app level (see [_assertLayerTypeAllowed]) while fresh installs get it in
-// the DDL directly. Never edit an applied migration: append a new step to
+// the DDL directly. v3 (2026-11-10) added app_settings, a tiny key-value
+// table for app-level preferences (theme mode) that must survive restarts.
+// Never edit an applied migration: append a new step to
 // [AppDatabase.migration]'s onUpgrade instead.
 // ---------------------------------------------------------------------------
 
@@ -64,6 +66,17 @@ class OutfitItemsTable extends Table {
   Set<Column> get primaryKey => {outfitId, slot};
 }
 
+/// `app_settings` table definition (schema v3): a tiny key-value store for
+/// app-level preferences that are not wardrobe data (currently only the
+/// theme mode). Primary key is [key].
+class AppSettingsTable extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+
+  @override
+  Set<Column> get primaryKey => {key};
+}
+
 /// The drift database for MyCloset.
 ///
 /// Because no code generation is used, typed access goes through the query
@@ -79,7 +92,7 @@ class AppDatabase extends GeneratedDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   Iterable<TableInfo> get allTables => const [];
@@ -104,6 +117,12 @@ class AppDatabase extends GeneratedDatabase {
               'ALTER TABLE items ADD COLUMN layer_type TEXT',
             );
           }
+          if (from < 3) {
+            // v2 -> v3: the app_settings key-value table (theme mode and
+            // future app-level preferences). Pure append - no existing
+            // table changes, so no data migration is needed.
+            await customStatement(appSettingsDdl);
+          }
         },
         beforeOpen: (details) async {
           // Enforce the FK cascade declared in the DDL (item deletion
@@ -113,9 +132,17 @@ class AppDatabase extends GeneratedDatabase {
         },
       );
 
-  /// DDL for schema version 2 (fresh installs), matching docs/backend.md
-  /// 2.1 exactly. Unlike the ALTER-based migration path this can carry the
-  /// layer_type CHECK constraint.
+  /// DDL for the app_settings table (schema v3). Shared by the fresh-install
+  /// DDL list and the v2 -> v3 migration step.
+  static const String appSettingsDdl = '''
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  ''';
+
+  /// DDL for schema version 3 (fresh installs). Unlike the ALTER-based
+  /// migration path this can carry the layer_type CHECK constraint.
   static const List<String> schemaStatements = [
     '''
     CREATE TABLE IF NOT EXISTS items (
@@ -156,6 +183,8 @@ class AppDatabase extends GeneratedDatabase {
       PRIMARY KEY (outfit_id, slot)
     )
     ''',
+    // v3: app-level preferences key-value store (theme mode).
+    appSettingsDdl,
   ];
 
   /// DDL for schema version 1, exactly as it shipped. Nothing at runtime
@@ -438,6 +467,35 @@ class AppDatabase extends GeneratedDatabase {
   Future<List<OutfitEntry>> getAllOutfitItems() async {
     final rows = await customSelect('SELECT * FROM outfit_items').get();
     return rows.map(_entryFromRow).toList();
+  }
+
+  /// Renames an outfit in place, keeping its id and creation date.
+  Future<void> renameOutfit(int outfitId, String name) {
+    return customStatement(
+      'UPDATE outfits SET name = ? WHERE id = ?',
+      [name, outfitId],
+    );
+  }
+
+  // ------------------------------------------------------------- app settings
+
+  /// Reads one app-level preference (schema v3 `app_settings`), or null
+  /// when unset.
+  Future<String?> getSetting(String key) async {
+    final rows = await customSelect(
+      'SELECT value FROM app_settings WHERE key = ?',
+      variables: [Variable(key)],
+    ).get();
+    return rows.isEmpty ? null : rows.first.read<String>('value');
+  }
+
+  /// Writes one app-level preference (insert or replace). customStatement
+  /// takes plain values, not drift Variables.
+  Future<void> setSetting(String key, String value) {
+    return customStatement(
+      'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      [key, value],
+    );
   }
 
   // ---------------------------------------------------------------- mapping

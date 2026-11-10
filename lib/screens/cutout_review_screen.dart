@@ -36,8 +36,7 @@ class CutoutReviewScreen extends StatefulWidget {
 }
 
 /// One eraser stroke: points and radius in image coordinates, plus the
-/// erase strength ([opacity], 0.0-1.0) the stroke was drawn with. The full
-/// spec is stored so undo replays the stroke exactly as drawn.
+/// erase strength ([opacity], 0.0-1.0) the stroke was drawn with.
 class _EraseStroke {
   final List<Offset> points;
   final double radius;
@@ -50,15 +49,20 @@ class _EraseStroke {
 enum _IndicatorMode { none, size, opacity }
 
 class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
-  /// The live cutout raster (base image with all strokes applied).
+  /// The working cutout raster: the original cutout with EVERY committed
+  /// stroke already composited in. Single source of truth - strokes
+  /// accumulate here permanently, so any number of brush passes survives.
   ui.Image? _image;
 
-  /// The untouched cutout the strokes are applied onto.
-  ui.Image? _baseImage;
-
-  /// Stroke history for undo (backend.md section 3.4: effectively "last 5").
-  final List<_EraseStroke> _strokes = [];
+  /// Working-image snapshots taken just before each committed stroke, for
+  /// undo (backend.md section 3.4: effectively "last 5"). Non-empty means
+  /// there are outstanding edits to persist.
+  final List<ui.Image> _undoStack = [];
   static const int maxUndoDepth = 5;
+
+  /// Serializes stroke commits so overlapping pointer-ups can never
+  /// composite against a stale working image.
+  Future<void> _commitQueue = Future.value();
 
   /// Stroke currently being drawn, for live preview.
   _EraseStroke? _activeStroke;
@@ -114,7 +118,6 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
       if (mounted) {
         setState(() {
           _image = frame.image;
-          _baseImage = frame.image;
         });
       }
     } catch (e) {
@@ -173,24 +176,38 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
   Future<void> _onPanEnd(DragEndDetails d) async {
     final stroke = _activeStroke;
     if (stroke == null || _image == null) return;
-    setState(() {
-      _strokes.add(stroke);
-      // Cap the history at 5 strokes; undo steps back within that window
-      // (backend.md section 3.4: "last 5").
-      while (_strokes.length > maxUndoDepth) {
-        _strokes.removeAt(0);
-      }
-      _activeStroke = null;
-    });
-    await _rerender();
+    setState(() => _activeStroke = null);
+    _commitStroke(stroke);
   }
 
-  /// Composites the base cutout with all strokes (dstOut hard stamps, each
-  /// at its stored opacity) into a fresh raster. No re-running the model
-  /// (backend.md section 3.4).
-  Future<void> _rerender() async {
-    if (_baseImage == null) return;
-    final base = _baseImage!;
+  /// Commits a finished stroke into the working image permanently: a
+  /// snapshot of the current working image is pushed for undo, then the
+  /// stroke is composited into a fresh raster that becomes the working
+  /// image. Commits run sequentially through [_commitQueue] so a fast
+  /// second stroke can never composite against a stale base. No re-running
+  /// the model (backend.md section 3.4).
+  void _commitStroke(_EraseStroke stroke) {
+    _commitQueue = _commitQueue.then((_) async {
+      final base = _image;
+      if (base == null || !mounted) return;
+      final composited = await _compositeStroke(base, stroke);
+      if (!mounted) return;
+      setState(() {
+        _undoStack.add(base);
+        // Cap the undo window at 5 snapshots (backend.md section 3.4:
+        // "last 5"). Older snapshots are dropped, but their strokes stay
+        // in the working image - only undo depth shrinks.
+        while (_undoStack.length > maxUndoDepth) {
+          _undoStack.removeAt(0);
+        }
+        _image = composited;
+      });
+    });
+  }
+
+  /// Composites one stroke (dstOut hard stamps at its stored opacity) onto
+  /// [base] into a fresh raster.
+  Future<ui.Image> _compositeStroke(ui.Image base, _EraseStroke stroke) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawImage(base, Offset.zero, Paint());
@@ -203,36 +220,26 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
       // the color is irrelevant - only the alpha carries the erase strength.
       ..maskFilter = null;
 
-    void paintStroke(_EraseStroke s) {
-      erase.color = Colors.black.withValues(alpha: s.opacity);
-      if (s.points.length == 1) {
-        canvas.drawCircle(s.points.first, s.radius, erase);
-        return;
-      }
-      final path = Path()..moveTo(s.points.first.dx, s.points.first.dy);
-      for (final p in s.points.skip(1)) {
+    erase.color = Colors.black.withValues(alpha: stroke.opacity);
+    if (stroke.points.length == 1) {
+      canvas.drawCircle(stroke.points.first, stroke.radius, erase);
+    } else {
+      final path = Path()..moveTo(stroke.points.first.dx, stroke.points.first.dy);
+      for (final p in stroke.points.skip(1)) {
         path.lineTo(p.dx, p.dy);
       }
-      erase.strokeWidth = s.radius * 2;
+      erase.strokeWidth = stroke.radius * 2;
       canvas.drawPath(path, erase);
     }
-
-    for (final s in _strokes) {
-      paintStroke(s);
-    }
-    final rendered = await recorder.endRecording().toImage(
-      base.width,
-      base.height,
-    );
-    if (mounted) {
-      setState(() => _image = rendered);
-    }
+    return recorder.endRecording().toImage(base.width, base.height);
   }
 
+  /// Undo restores the working-image snapshot taken before the last
+  /// committed stroke. Outstanding edits are exactly the snapshots on the
+  /// stack: undoing all of them leaves nothing to persist.
   Future<void> _undo() async {
-    if (_strokes.isEmpty) return;
-    setState(() => _strokes.removeLast());
-    await _rerender();
+    if (_undoStack.isEmpty) return;
+    setState(() => _image = _undoStack.removeLast());
   }
 
   // --------------------------------------------------------------- actions
@@ -243,7 +250,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       String? cutoutPath = widget.draftCutoutPath;
-      if (_hasCutout && _image != null && _strokes.isNotEmpty) {
+      if (_hasCutout && _image != null && _undoStack.isNotEmpty) {
         // Persist the erased alpha back to the draft cutout file.
         final data = await _image!.toByteData(format: ui.ImageByteFormat.png);
         if (data != null) {
@@ -534,18 +541,18 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                       ),
                     ),
                     const SizedBox(width: Spacing.s),
-                    // Undo while strokes exist (last 5).
+                    // Undo while committed strokes exist (last 5).
                     Tooltip(
                       message: 'Undo',
                       child: GestureDetector(
-                        onTap: _strokes.isEmpty ? null : _undo,
+                        onTap: _undoStack.isEmpty ? null : _undo,
                         child: Container(
                           width: 44,
                           height: 44,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: _strokes.isEmpty
+                              color: _undoStack.isEmpty
                                   ? c.hairline
                                   : c.inkSecondary,
                             ),
@@ -553,7 +560,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                           child: Icon(
                             AppIcons.undo,
                             size: 20,
-                            color: _strokes.isEmpty ? c.hairline : c.ink,
+                            color: _undoStack.isEmpty ? c.hairline : c.ink,
                           ),
                         ),
                       ),
@@ -585,7 +592,9 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
   }
 }
 
-/// Paints the cutout and the in-progress eraser stroke. Strokes erase alpha
+/// Paints the eraser canvas: the `tile` gray backdrop first (so erased
+/// transparent areas read as gray, not white - design.md section 6.3),
+/// then the cutout and the in-progress eraser stroke. Strokes erase alpha
 /// (dstOut) with a hard round stamp - anti-aliased, no blur feathering
 /// (backend.md section 3.4).
 class _CutoutPainter extends CustomPainter {
@@ -601,6 +610,12 @@ class _CutoutPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // The gray canvas behind the garment: same tile token as the hero
+    // cards, rounded like them.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(16)),
+      Paint()..color = tileColor,
+    );
     canvas.saveLayer(null, Paint());
     canvas.drawImageRect(
       image,

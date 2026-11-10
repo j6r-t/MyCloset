@@ -8,9 +8,8 @@
 
 import 'dart:io';
 
-// widgets.dart re-exports foundation (ChangeNotifier, debugPrint) and the
-// inherited-widget plumbing for [AppStateScope].
-import 'package:flutter/widgets.dart';
+// material.dart for ThemeMode (the app-level light/dark/system preference).
+import 'package:flutter/material.dart';
 
 import '../database/app_database.dart';
 import '../models/enums.dart';
@@ -44,6 +43,11 @@ class AppState extends ChangeNotifier {
 
   /// outfitId -> its slot entries.
   final Map<int, List<OutfitEntry>> _outfitItems = {};
+
+  /// The persisted app theme preference (Settings screen). Defaults to
+  /// following the system until the user picks a mode; read from the
+  /// database in [load].
+  ThemeMode themeMode = ThemeMode.system;
 
   /// True once the first [load] finished (successfully or not).
   bool loaded = false;
@@ -104,6 +108,18 @@ class AppState extends ChangeNotifier {
         _outfitItems.putIfAbsent(entry.outfitId, () => []).add(entry);
       }
       loadError = null;
+      // Theme preference: read separately so a settings-table problem never
+      // masks a wardrobe that loaded fine.
+      try {
+        final stored = await _database.getSetting('theme_mode');
+        themeMode = switch (stored) {
+          'light' => ThemeMode.light,
+          'dark' => ThemeMode.dark,
+          _ => ThemeMode.system,
+        };
+      } catch (e) {
+        debugPrint('AppState.load: theme preference unavailable: $e');
+      }
     } catch (e) {
       loadError = e;
       debugPrint('AppState.load failed: $e');
@@ -252,6 +268,34 @@ class AppState extends ChangeNotifier {
   Future<void> deleteOutfit(int outfitId) async {
     await _database.deleteOutfit(outfitId);
     await load();
+  }
+
+  /// Renames an outfit in place (keeps its id and creation date).
+  Future<void> renameOutfit(int outfitId, String name) async {
+    await _database.renameOutfit(outfitId, name);
+    await load();
+  }
+
+  /// Empties one slot of an outfit (the outfit detail's per-row delete;
+  /// the emptied slot renders as a dashed placeholder per userFlow.md edge
+  /// behaviors).
+  Future<void> removeOutfitSlot(int outfitId, OutfitSlot slot) async {
+    await _database.removeOutfitSlot(outfitId, slot);
+    await load();
+  }
+
+  // ------------------------------------------------------------ appearance
+
+  /// Persists the app theme preference and applies it immediately.
+  Future<void> setThemeMode(ThemeMode mode) async {
+    themeMode = mode;
+    notifyListeners();
+    try {
+      await _database.setSetting('theme_mode', mode.name);
+    } catch (e) {
+      // The choice stays applied for this session even if the write fails.
+      debugPrint('AppState.setThemeMode: could not persist: $e');
+    }
   }
 
   // ----------------------------------------------------------- backup/restore

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../services/backup_service.dart';
 import '../ui/app_state.dart';
@@ -156,6 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
+    final state = AppStateScope.of(context);
     return SafeArea(
       bottom: false,
       child: Column(
@@ -190,6 +192,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       'here. Nothing to undo.',
                   onTap: _restore,
                   enabled: !_busy,
+                ),
+                const SizedBox(height: Spacing.section),
+                // Theme (System / Light / Dark). The choice applies
+                // immediately and persists in the app_settings table.
+                _ThemeRow(
+                  mode: state.themeMode,
+                  onSelect: (mode) => state.setThemeMode(mode),
                 ),
                 const SizedBox(height: Spacing.section),
                 _SettingsRow(
@@ -244,6 +253,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The Theme settings row: a hairline row naming the preference with a
+/// three-option pill selector (System / Light / Dark) - active pill filled
+/// with ink, content on it (design.md section 1 pill styles; the primary
+/// pairing inverts itself per brightness through the tokens).
+class _ThemeRow extends StatelessWidget {
+  final ThemeMode mode;
+  final ValueChanged<ThemeMode> onSelect;
+
+  const _ThemeRow({required this.mode, required this.onSelect});
+
+  static const _options = [
+    (mode: ThemeMode.system, label: 'System'),
+    (mode: ThemeMode.light, label: 'Light'),
+    (mode: ThemeMode.dark, label: 'Dark'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.m),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.hairline)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Symbols.light_mode, size: 22, color: c.inkSecondary),
+          const SizedBox(width: Spacing.m),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Theme', style: AppText.label(context)),
+                const SizedBox(height: 2),
+                Text(
+                  'Applies to the whole app and stays after a restart.',
+                  style: AppText.caption(context),
+                ),
+                const SizedBox(height: Spacing.s),
+                Wrap(
+                  spacing: Spacing.s,
+                  runSpacing: Spacing.s,
+                  children: [
+                    for (final option in _options)
+                      _ThemePill(
+                        label: option.label,
+                        active: option.mode == mode,
+                        onTap: () => onSelect(option.mode),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One selectable pill in the theme row: ink fill with on-ink content when
+/// active, hairline outline otherwise.
+class _ThemePill extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _ThemePill({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: Motion.fast,
+        curve: Motion.curve,
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: Spacing.m),
+        decoration: BoxDecoration(
+          color: active ? c.ink : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: active ? c.ink : c.hairline),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: AppText.button(context, color: active ? c.bg : c.ink),
+        ),
       ),
     );
   }

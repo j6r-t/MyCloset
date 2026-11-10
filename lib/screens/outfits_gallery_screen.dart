@@ -7,6 +7,7 @@ import '../ui/theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/flat_lay_column.dart';
 import 'outfit_builder_screen.dart';
+import 'outfit_detail_screen.dart';
 
 /// Screen 6 - Outfits (tab root, design.md section 6.6): 2-column grid, the
 /// first tile "Create Fit" (dashed), each outfit rendered as a vertical
@@ -80,7 +81,13 @@ class OutfitsGalleryScreen extends StatelessWidget {
                       date: _formattedDate(outfit.createdAt),
                       items: FlatLayColumn.ordered(slotItems),
                       incomplete: isIncomplete(slots),
-                      onTap: () => _showActions(context, outfit.name, outfit.id),
+                      // Tap opens the outfit detail (name, flat lay,
+                      // components); edit and delete live there now.
+                      onTap: () => Navigator.of(context).push(
+                        appRoute(
+                          OutfitDetailScreen(outfitId: outfit.id),
+                        ),
+                      ),
                     );
                   },
                 ),
@@ -88,96 +95,6 @@ class OutfitsGalleryScreen extends StatelessWidget {
       ],
       ),
     );
-  }
-
-  Future<void> _showActions(
-    BuildContext context,
-    String name,
-    int outfitId,
-  ) async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(Spacing.gutter),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(name, style: AppText.title(sheetContext)),
-              const SizedBox(height: Spacing.m),
-              OutlinedButton(
-                onPressed: () => Navigator.of(sheetContext).pop('edit'),
-                child: Text('Edit in builder', style: AppText.button(sheetContext)),
-              ),
-              const SizedBox(height: Spacing.s),
-              OutlinedButton(
-                onPressed: () => Navigator.of(sheetContext).pop('delete'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.of(sheetContext).destructive,
-                ),
-                child: Text(
-                  'Delete outfit',
-                  style: AppText.button(
-                    sheetContext,
-                    color: AppColors.of(sheetContext).destructive,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (action == null || !context.mounted) return;
-    final state = AppStateScope.of(context);
-
-    if (action == 'edit') {
-      if (!context.mounted) return;
-      await Navigator.of(context).push(
-        appRoute(
-          OutfitBuilderScreen(
-            existingOutfitId: outfitId,
-            existingName: name,
-          ),
-        ),
-      );
-    } else if (action == 'delete') {
-      // Destructive action: confirm first, same pattern as item delete
-      // (userFlow.md flow 4, step 3).
-      if (!context.mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Remove $name?'),
-          content: const Text("This can't be undone."),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Keep'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.of(dialogContext).destructive,
-              ),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !context.mounted) return;
-      try {
-        await state.deleteOutfit(outfitId);
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not delete the outfit: $e')),
-          );
-        }
-      }
-    }
   }
 }
 

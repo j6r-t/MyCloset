@@ -283,13 +283,13 @@ void main() {
       ''');
       await legacy.close();
 
-      // Opening through AppDatabase runs the v1 -> v2 migration.
+      // Opening through AppDatabase runs the v1 -> v3 migrations.
       final migrated = AppDatabase(NativeDatabase(dbFile));
       final version = await migrated
           .customSelect('PRAGMA user_version')
           .get()
           .then((rows) => rows.first.read<int>('user_version'));
-      expect(version, 2);
+      expect(version, 3);
 
       // Rows survived with nulls in the new columns.
       final items = await migrated.getAllItems();

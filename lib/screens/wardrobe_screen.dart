@@ -681,7 +681,10 @@ class _CategoryChart extends StatelessWidget {
                     height: 32 + (entry.value.length / maxCount) * 72,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: AppColors.category(entry.key),
+                      color: AppColors.category(
+                        entry.key,
+                        Theme.brightnessOf(context),
+                      ),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
