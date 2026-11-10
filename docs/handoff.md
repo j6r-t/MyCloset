@@ -10,7 +10,7 @@
   - ✅ Backend schema v2 migration (size + layer_type, engine outer-layer rule, backup-validation fix).
   - ✅ Frontend rebuild: bottom pill nav + FAB, dashboard value headline + category bars, seamless label-free grid, vertical flat-lay outfit columns, Size/Layer Type persisted through AppState.
   - ✅ Verify: `flutter analyze` clean, **55/55 tests pass**, debug APK builds, zero v1 artifacts (no serif/cream/gold/google_fonts/emojis).
-  - Deferred user discussion still open: the on-device TFLite segmentation model (stub active — photos keep original background).
+  - ✅ **On-device segmentation implemented (2026-11-10)**: `assets/models/u2netp_320.tflite` (2.4MB U²-Netp, flatbuffer-verified 7-output structure), `TFLiteSegmentationService` + pure-Dart `mask_postprocessing.dart` (threshold 0.5 → despeckle → feather → alpha). All failure paths degrade to keep-the-original. **67/67 tests green, APK builds.** Real-world quality validation on a phone still pending (user's manual test — incl. the colorful-rock-floor case). Tuning knobs if needed: threshold constant, despeckle fraction, or swap to the official 88MB model (see backend.md §3.2).
 - Nothing committed to git yet (awaiting user request).
 
 ## What this is

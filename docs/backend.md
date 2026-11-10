@@ -68,8 +68,10 @@ Save DB row **after** files are written; on failure, delete orphan files. Draft 
 Downscale to **512px long edge** (model input), keep original file untouched.
 
 ### 3.2 Segmentation (the hard milestone)
-- Model: **U2Net-lite (or U²-Net) converted to TFLite float32**, ~4–5MB, in `assets/models/`. Decide at Phase 1 start: convert once on PC with Python from open-source checkpoints, or use an existing pre-converted clothing/person segmentation model. One-time job, document the chosen source in `docs/` when picked.
-- Input: 320×320 RGB, normalized to [0,1]. Output: 320×320 grayscale saliency map.
+- **Model chosen (2026-11-10): `assets/models/u2netp_320.tflite`** (2.4MB) — U²-Netp float16 conversion, verified by flatbuffer inspection. Provenance: Hwang2212/flutter_tflite_imagebackground_remove (GitHub raw); authenticity corroborated by its 7-output structure (authentic U²-Net signature). Fallback quality option (never downloaded into app): official Google LiteRT full U²-Net fp16, 88MB, https://huggingface.co/litert-community/U-2-Net (Apache-2.0).
+- **Verified tensor contract:** input `[1,320,320,3]` float32 NHWC; outputs **7** maps, each `[1,320,320,1]` float32 — take **output index 0** (the final fused d0 saliency map).
+- **Preprocessing:** resize to 320×320 RGB; normalize per the official U²-Net recipe (divide pixels by the image's max value). Alternative to try if masks look off: ImageNet mean/std normalization.
+- Inference: run via `tflite_flutter` **inside an isolate** (target < 3s on a mid-range phone); interpreter loaded once and reused.
 - Post-process: threshold mask at 0.5 → morphological cleanup (erode/dilate 1px) → upscale mask to image size with bilinear → **feather** edges (2px gaussian) → alpha = mask × 255 → composite RGBA cutout PNG.
 
 ### 3.3 Fallback

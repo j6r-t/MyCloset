@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../services/segmentation_service.dart';
+import '../services/tflite_segmentation_service.dart';
 import '../ui/app_state.dart';
 import '../ui/theme.dart';
 import '../widgets/shimmer.dart';
@@ -21,6 +21,10 @@ class CaptureScreen extends StatefulWidget {
 }
 
 class _CaptureScreenState extends State<CaptureScreen> {
+  // Service injection point (docs/backend.md section 3.2): the real on-device
+  // model; it returns null on any failure, engaging the documented fallback.
+  final TFLiteSegmentationService _segmentation = TFLiteSegmentationService();
+
   bool _processing = false;
 
   /// Blocks pops (system back included) until the drafts are cleaned up;
@@ -58,12 +62,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
       return;
     }
 
-    // Run the segmentation (backend.md section 3). The current stub always
-    // returns null, so the flow lands on the documented fallback: keep the
+    // Run the segmentation (backend.md section 3). On failure the service
+    // returns null and the flow lands on the documented fallback: keep the
     // original photo as the item image (section 3.3).
     Uint8List? cutoutPng;
     try {
-      final result = await const StubSegmentationService().segment(bytes);
+      final result = await _segmentation.segment(bytes);
       cutoutPng = result?.cutoutPng;
     } catch (e) {
       debugPrint('Segmentation failed, using original: $e');
