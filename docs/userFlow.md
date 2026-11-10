@@ -28,6 +28,7 @@ Settings (gear, app bar)
    - Looks clean → Continue.
    - Leftover background pixels → toggle Eraser, drag over them, Continue.
    - Unusable → Retake (back to step 1; nothing saved yet).
+3b. **Identification screen** (added 2026-11-10, the loading step): if identification keys are set (Settings), Continue shows a full-page "Looking up this piece…" state (cutout + shimmer) while the pipeline runs → **found**: details page opens already filled (empty fields only, each marked "auto") → **not found**: a clear outcome screen ("Couldn't identify this piece" + reason) with "Fill in manually" and a one-time "Try again". No keys → the details page opens directly with a setup caption.
 4. **Details screen**: name (only required field); category of 6 (top, bottom, dress, shoes, outerwear, accessory — choosing dress auto-marks it as a one-piece for outfit logic); auto-extracted primary/secondary color swatches shown, tap to correct from the radial color wheel; optional: subtype, brand, price (TND), season (summer/winter/all), fabric, notes. **Auto-fill (added 2026-11-10):** if identification keys are set (Settings), the form silently runs the online pipeline on open and fills empty name/brand/price/subtype with suggested values, each marked with a fading "auto" chip; typed values are never overwritten; failure shows one quiet caption + a single retry icon.
 5. Save → back to Wardrobe, new tile briefly highlighted (accent border fade, 1s). Cancel at any point discards the draft images (deleted from disk, no orphans).
 

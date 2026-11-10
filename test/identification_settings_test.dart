@@ -4,20 +4,19 @@
 // restores the flags. runIdentification without keys returns the graceful
 // unavailable result without any HTTP.
 //
-// The second group covers the details form's quiet auto-fill (add mode
-// opens, the lookup runs in the background, only empty fields take the
-// suggestions): auto-run attempts once, keyless and failed outcomes show
-// the quiet caption with a one-shot retry, and the old match sheet and its
-// button are gone.
+// The second group covers the details form as a pure receiver: the
+// identification screen owns running the lookup now, so the form only
+// applies a passed-in prefill to EMPTY fields (brief "auto" chips), shows
+// the setup caption when opened without keys, and stays silent in edit
+// mode. The lookup itself (loading, failure, retry) is covered in
+// identification_screen_test.dart.
 //
 // No real key material appears in this file.
-import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_symbols_icons/symbols.dart';
 
 import 'package:my_closet/database/app_database.dart';
 import 'package:my_closet/models/enums.dart';
@@ -108,7 +107,7 @@ void main() {
     });
   });
 
-  group('details form auto-fill', () {
+  group('details form prefill', () {
     // Nonexistent path: color extraction and the cutout thumbnail both
     // degrade quietly, which is exactly what the tests rely on.
     const draftPath = 'nonexistent-draft.png';
@@ -123,10 +122,19 @@ void main() {
           createdAt: DateTime(2026, 11, 10),
         );
 
+    IdentificationResult okResult() => IdentificationResult(
+          ok: true,
+          matches: const [],
+          suggestedBrand: 'Acne Studios',
+          suggestedPriceValue: 120,
+          notes: const [],
+        );
+
     Future<void> pumpForm(
       WidgetTester tester,
       _StubAppState state, {
       Item? existing,
+      IdentificationResult? prefill,
     }) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -136,6 +144,7 @@ void main() {
             child: DetailsFormScreen(
               draftOriginalPath: existing == null ? draftPath : null,
               existing: existing,
+              prefill: prefill,
             ),
           ),
         ),
@@ -143,160 +152,94 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('add mode auto-runs once, with no button and no sheet',
+    String? fieldValue(WidgetTester tester, String rowKey) {
+      final field = find.descendant(
+        of: find.byKey(ValueKey(rowKey)),
+        matching: find.byType(TextFormField),
+      );
+      return tester.widget<TextFormField>(field).controller!.text;
+    }
+
+    testWidgets('a prefill fills the empty fields with brief auto chips',
         (tester) async {
       final state = _StubAppState(
         database: db,
         storage: FileStorageService(documentsDir: () async => temp),
       );
-      state.serpApiKeySet = true;
-      final completer = Completer<IdentificationResult>();
-      state.onRun = () => completer.future;
 
-      await pumpForm(tester, state);
-      await tester.pump();
+      await pumpForm(tester, state, prefill: okResult());
 
-      // Exactly one background attempt, started at open.
-      expect(state.runCount, 1);
-      // The old opt-in affordances are gone.
-      expect(find.text('Identify online'), findsNothing);
-      expect(find.byType(BottomSheet), findsNothing);
-      // Quiet per-row progress captions instead.
-      expect(find.text('Identifying...'), findsWidgets);
+      // Brand and price landed; nothing else was touched.
+      expect(fieldValue(tester, 'row-brand'), 'Acne Studios');
+      expect(fieldValue(tester, 'row-price'), '120.0');
+      expect(fieldValue(tester, 'row-subtype'), '');
 
-      completer.complete(IdentificationResult(
-        ok: true,
-        matches: const [],
-        notes: const [],
-      ));
-      await tester.pump();
-      // Let the "auto" chip fade timer (2s) run out so no timer is pending.
+      // What the search contributed is visible: one "auto" chip per
+      // filled row.
+      expect(find.text('auto'), findsNWidgets(2));
+
+      // The chips clear after their brief highlight window.
       await tester.pump(const Duration(seconds: 3));
+      expect(find.text('auto'), findsNothing);
     });
 
-    testWidgets('without keys the form never runs and shows the setup '
-        'caption with a retry affordance', (tester) async {
+    testWidgets('a prefill never overwrites values a user has set '
+        '(edit mode ignores it)', (tester) async {
+      final state = _StubAppState(
+        database: db,
+        storage: FileStorageService(documentsDir: () async => temp),
+      );
+      state.serpApiKeySet = true;
+
+      // Edit mode: the existing item's values (name present, brand/price
+      // unset) must stay exactly as they are - no prefill, no chips, no
+      // setup caption.
+      await pumpForm(
+        tester,
+        state,
+        existing: editItem(),
+        prefill: okResult(),
+      );
+
+      expect(fieldValue(tester, 'row-name'), 'Blue blazer');
+      expect(fieldValue(tester, 'row-brand'), '');
+      expect(fieldValue(tester, 'row-price'), '');
+      expect(find.text('auto'), findsNothing);
+      expect(state.runCount, 0);
+    });
+
+    testWidgets('without keys the add form never runs and shows the '
+        'setup caption', (tester) async {
       final state = _StubAppState(
         database: db,
         storage: FileStorageService(documentsDir: () async => temp),
       );
 
       await pumpForm(tester, state);
-      await tester.pump();
 
+      // The form is a pure receiver: it never runs the lookup itself.
       expect(state.runCount, 0);
       expect(
         find.text('Add your SerpAPI key in Settings to auto-fill details'),
         findsOneWidget,
       );
-      expect(find.byIcon(Symbols.refresh), findsOneWidget);
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('a suggestion fills an empty field and never overwrites a '
-        'typed value', (tester) async {
-      final state = _StubAppState(
-        database: db,
-        storage: FileStorageService(documentsDir: () async => temp),
-      );
-      state.serpApiKeySet = true;
-      final completer = Completer<IdentificationResult>();
-      state.onRun = () => completer.future;
-
-      await pumpForm(tester, state);
-      await tester.pump();
-
-      // The user types a brand while the lookup is still in flight.
-      final brandField = find.descendant(
-        of: find.byKey(const ValueKey('row-brand')),
-        matching: find.byType(TextFormField),
-      );
-      await tester.enterText(brandField, 'Zara');
-      await tester.pump();
-
-      completer.complete(IdentificationResult(
-        ok: true,
-        matches: const [],
-        suggestedBrand: 'Acne Studios',
-        suggestedPriceValue: 120,
-        notes: const [],
-      ));
-      await tester.pump();
-
-      // Typed value wins; the empty price field takes the suggestion.
-      final brandText = tester
-          .widget<TextFormField>(brandField)
-          .controller!
-          .text;
-      expect(brandText, 'Zara');
-      final priceField = find.descendant(
-        of: find.byKey(const ValueKey('row-price')),
-        matching: find.byType(TextFormField),
-      );
-      expect(
-        tester.widget<TextFormField>(priceField).controller!.text,
-        '120.0',
-      );
-
-      // What the search contributed is visible: one "auto" chip (price
-      // only - brand kept the user's value).
-      expect(find.text('auto'), findsOneWidget);
-
-      await tester.pump(const Duration(seconds: 3));
-      // The chip clears after its brief highlight window.
       expect(find.text('auto'), findsNothing);
     });
 
-    testWidgets('failure shows the quiet caption with one retry, then the '
-        'retry affordance is spent', (tester) async {
+    testWidgets('edit mode shows neither caption nor chips', (tester) async {
       final state = _StubAppState(
         database: db,
         storage: FileStorageService(documentsDir: () async => temp),
       );
-      state.serpApiKeySet = true;
-      state.onRun = () async =>
-          IdentificationResult.unavailable(const ['No matches anywhere.']);
-
-      await pumpForm(tester, state);
-      await tester.pump();
-
-      // One automatic attempt, no modal noise.
-      expect(state.runCount, 1);
-      expect(
-        find.text("Couldn't identify this piece - fill in manually"),
-        findsOneWidget,
-      );
-      expect(find.byIcon(Symbols.refresh), findsOneWidget);
-
-      // The retry affordance re-runs the lookup exactly once.
-      await tester.tap(find.byIcon(Symbols.refresh));
-      await tester.pump();
-      expect(state.runCount, 2);
-      expect(find.byIcon(Symbols.refresh), findsNothing);
-      expect(
-        find.text("Couldn't identify this piece - fill in manually"),
-        findsOneWidget,
-      );
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('edit mode never auto-runs identification', (tester) async {
-      final state = _StubAppState(
-        database: db,
-        storage: FileStorageService(documentsDir: () async => temp),
-      );
-      state.serpApiKeySet = true;
 
       await pumpForm(tester, state, existing: editItem());
-      await tester.pump(const Duration(seconds: 1));
 
       expect(state.runCount, 0);
-      expect(find.text('Identifying...'), findsNothing);
-      expect(find.byIcon(Symbols.refresh), findsNothing);
       expect(
         find.text('Add your SerpAPI key in Settings to auto-fill details'),
         findsNothing,
       );
+      expect(find.text('auto'), findsNothing);
     });
   });
 }

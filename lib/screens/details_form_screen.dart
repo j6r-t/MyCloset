@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
-import 'package:material_symbols_icons/symbols.dart';
 
 import '../data/named_colors.dart';
 import '../models/enums.dart';
@@ -30,11 +29,17 @@ class DetailsFormScreen extends StatefulWidget {
   /// Existing item when editing.
   final Item? existing;
 
+  /// Result of the identification screen's successful lookup. Add mode
+  /// only: its suggestions prefill the EMPTY brand/type/price fields with
+  /// a brief "auto" chip each. Ignored in edit mode.
+  final IdentificationResult? prefill;
+
   const DetailsFormScreen({
     super.key,
     this.draftOriginalPath,
     this.draftCutoutPath,
     this.existing,
+    this.prefill,
   }) : assert(
          (draftOriginalPath != null) != (existing != null),
          'Either draft paths (new item) or an existing item are required',
@@ -42,25 +47,6 @@ class DetailsFormScreen extends StatefulWidget {
 
   @override
   State<DetailsFormScreen> createState() => _DetailsFormScreenState();
-}
-
-/// Lifecycle of the add-mode auto-fill lookup (Fitted-style: the form opens,
-/// the online search runs in the background, the user just reviews).
-enum _AutoFillPhase {
-  /// Add mode without a photo, or edit mode: nothing runs, nothing shows.
-  idle,
-
-  /// Lookup in flight; auto-fillable rows show an inline caption.
-  running,
-
-  /// Result arrived (filled fields keep a brief "auto" chip).
-  done,
-
-  /// The pipeline returned nothing usable: quiet caption + one retry.
-  failed,
-
-  /// No API keys set: setup caption + one retry (after Settings).
-  noKeys,
 }
 
 /// The rows the identification run can touch.
@@ -88,19 +74,14 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
 
   // ------------------------------------------------- online auto-fill (add)
 
-  /// True once the add-mode lookup was kicked off (gates the row captions
-  /// so an add-without-photo or edit form stays silent).
-  bool _autoFillStarted = false;
+  /// True when the form was opened for a new item with neither
+  /// identification API key set: the setup caption explains why nothing was
+  /// auto-filled (the identification screen skips itself in that case).
+  bool _noKeys = false;
 
-  /// Current auto-fill lifecycle (add mode only; edit mode stays [idle]).
-  _AutoFillPhase _autoFillPhase = _AutoFillPhase.idle;
-
-  /// One manual retry after a keyless or failed automatic attempt (task
-  /// spec). Consumed by the banner's refresh button.
-  bool _retryLeft = false;
-
-  /// Rows the last result filled; each carries a brief "auto" chip that
-  /// clears after two seconds so the user sees what the search contributed.
+  /// Rows the identification screen's result filled; each carries a brief
+  /// "auto" chip that clears after two seconds so the user sees what the
+  /// search contributed.
   final Set<_AutoField> _autoFilled = {};
   Timer? _autoFillChipTimer;
 
@@ -140,14 +121,16 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
 
     if (existing == null) {
       _extractColors();
-      // Fitted-style auto-fill: with a photo present, the online lookup
-      // starts the moment the form opens. Fire-and-forget - the form
-      // renders immediately and every field stays editable meanwhile.
-      if (widget.draftCutoutPath != null ||
-          widget.draftOriginalPath != null) {
-        _autoFillStarted = true;
-        _retryLeft = true;
-        unawaited(_runIdentification());
+      // The identification screen owns running the lookup now; this form
+      // only receives its result (or explains a keyless skip).
+      final prefill = widget.prefill;
+      if (prefill != null) {
+        _applyPrefill(prefill);
+      } else {
+        final state = _stateMaybe;
+        _noKeys =
+            state == null ||
+            !(state.serpApiKeySet || state.visionApiKeySet);
       }
     }
   }
@@ -347,91 +330,39 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
   // --------------------------------------------------- online identification
 
   /// One-shot AppState read without registering a dependency (safe from
-  /// initState, where the add-mode lookup is kicked off).
+  /// initState).
   AppState? get _stateMaybe =>
       context.getInheritedWidgetOfExactType<AppStateScope>()?.notifier;
 
-  /// Runs the online lookup over the draft photo (cutout preferred, the
-  /// original when segmentation fell back) and quietly fills ONLY the empty
-  /// auto-fillable fields with what came back. Never blocks the form,
-  /// never overwrites a typed value, never throws into the zone handler.
-  Future<void> _runIdentification() async {
-    final imagePath = widget.draftCutoutPath ?? widget.draftOriginalPath;
-    if (imagePath == null) return;
-    final state = _stateMaybe;
-    if (state == null) return;
-
-    // Keyless: no network attempt at all - the caption points at Settings
-    // and the refresh affordance re-checks the flags after the user adds
-    // a key.
-    if (!(state.serpApiKeySet || state.visionApiKeySet)) {
-      if (!mounted) return;
-      setState(() => _autoFillPhase = _AutoFillPhase.noKeys);
-      return;
-    }
-
-    if (!mounted) return;
-    setState(() => _autoFillPhase = _AutoFillPhase.running);
-
-    IdentificationResult result;
-    try {
-      result = await state.runIdentification(
-        imagePath: imagePath,
-        categoryLabel: _category.name,
-        subtype: _subtype.text.trim().isEmpty ? null : _subtype.text.trim(),
-        brand: _brand.text.trim().isEmpty ? null : _brand.text.trim(),
-      );
-    } catch (e) {
-      debugPrint('Auto identification failed: $e');
-      result = IdentificationResult.unavailable(
-        const ['Identification failed.'],
-      );
-    }
-    if (!mounted) return;
-
-    if (!result.ok) {
-      setState(() => _autoFillPhase = _AutoFillPhase.failed);
-      return;
-    }
-
+  /// Applies the identification screen's successful result: a suggestion
+  /// only ever lands in an EMPTY field - the user's text always wins.
+  /// Each filled row shows a brief "auto" chip (2s) so the user sees what
+  /// the search contributed.
+  void _applyPrefill(IdentificationResult result) {
     final applied = <_AutoField>{};
-    setState(() {
-      // The guard from the sheet era, now automatic: a suggestion only
-      // ever lands in an EMPTY field - the user's text always wins.
-      final brand = result.suggestedBrand;
-      if (brand != null && _brand.text.trim().isEmpty) {
-        _brand.text = brand;
-        applied.add(_AutoField.brand);
-      }
-      final type = result.suggestedType;
-      if (type != null && _subtype.text.trim().isEmpty) {
-        _subtype.text = type;
-        applied.add(_AutoField.subtype);
-      }
-      final price = result.suggestedPriceValue?.toString() ??
-          _parseablePrice(result.suggestedPriceText);
-      if (price != null && _price.text.trim().isEmpty) {
-        _price.text = price;
-        applied.add(_AutoField.price);
-      }
-      _autoFilled.addAll(applied);
-      _autoFillPhase = _AutoFillPhase.done;
-    });
-
+    final brand = result.suggestedBrand;
+    if (brand != null && _brand.text.trim().isEmpty) {
+      _brand.text = brand;
+      applied.add(_AutoField.brand);
+    }
+    final type = result.suggestedType;
+    if (type != null && _subtype.text.trim().isEmpty) {
+      _subtype.text = type;
+      applied.add(_AutoField.subtype);
+    }
+    final price = result.suggestedPriceValue?.toString() ??
+        _parseablePrice(result.suggestedPriceText);
+    if (price != null && _price.text.trim().isEmpty) {
+      _price.text = price;
+      applied.add(_AutoField.price);
+    }
     if (applied.isEmpty) return;
+    setState(() => _autoFilled.addAll(applied));
     _autoFillChipTimer?.cancel();
     _autoFillChipTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       setState(_autoFilled.clear);
     });
-  }
-
-  /// The failure banner's refresh affordance: re-runs the lookup once, then
-  /// the caption stays without the button (task spec: retry once).
-  void _retryIdentification() {
-    if (!_retryLeft) return;
-    _retryLeft = false;
-    unawaited(_runIdentification());
   }
 
   /// Price string as the pipeline's raw source text, normalized to a
@@ -442,50 +373,22 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
     return value?.toString();
   }
 
-  /// Quiet caption line under the header, only for the keyless and failed
-  /// outcomes; running and done states stay silent here (the rows carry
-  /// those signals inline).
+  /// Quiet caption line under the header, only for the keyless add case;
+  /// the successful-prefill and manual-fill forms stay silent here.
   Widget? _identificationBanner() {
-    final String? message = switch (_autoFillPhase) {
-      _AutoFillPhase.noKeys =>
-        'Add your SerpAPI key in Settings to auto-fill details',
-      _AutoFillPhase.failed => "Couldn't identify this piece - fill in manually",
-      _ => null,
-    };
-    if (message == null) return null;
+    if (!_noKeys) return null;
     return Center(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              message,
-              style: AppText.caption(context),
-              textAlign: TextAlign.center,
-            ),
-          ),
-          if (_retryLeft)
-            IconButton(
-              onPressed: _retryIdentification,
-              icon: const Icon(Symbols.refresh, size: 18),
-              tooltip: 'Retry identification',
-              visualDensity: VisualDensity.compact,
-            ),
-        ],
+      child: Text(
+        'Add your SerpAPI key in Settings to auto-fill details',
+        style: AppText.caption(context),
+        textAlign: TextAlign.center,
       ),
     );
   }
 
-  /// Trailing inline signal for an auto-fillable row: "Identifying..." while
-  /// the lookup runs, an "auto" chip on rows the result filled.
+  /// Trailing inline signal for an auto-fillable row: an "auto" chip on
+  /// rows the identification result filled.
   Widget? _rowSuffix(_AutoField field) {
-    if (_autoFillStarted && _autoFillPhase == _AutoFillPhase.running) {
-      return Text(
-        'Identifying...',
-        key: ValueKey('identifying-$field'),
-        style: AppText.caption(context),
-      );
-    }
     if (_autoFilled.contains(field)) {
       final c = AppColors.of(context);
       return Container(
@@ -572,17 +475,17 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
               ),
               const SizedBox(height: Spacing.section),
 
-              // Quiet auto-fill outcome captions (add mode only): the setup
-              // hint when no key is set, the failure line when the lookup
-              // came back empty. Both carry a one-shot refresh retry.
+              // Quiet auto-fill setup caption (add mode, keys absent only):
+              // explains why nothing was looked up. Success shows the "auto"
+              // chips inline on the filled rows instead.
               if (banner != null) ...[
                 banner,
                 const SizedBox(height: Spacing.m),
               ],
 
               // Fitted's field order (design.md section 6.4). Name first,
-              // optional. The auto-fillable rows carry the inline running
-              // caption and post-fill "auto" chips.
+              // optional. The auto-fillable rows carry the post-fill "auto"
+              // chips.
               _Row(
                 key: const ValueKey('row-name'),
                 label: 'Name',

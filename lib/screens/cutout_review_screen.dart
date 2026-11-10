@@ -9,7 +9,7 @@ import '../ui/app_state.dart';
 import '../ui/theme.dart';
 import '../widgets/brush_controls.dart';
 import 'capture_screen.dart';
-import 'details_form_screen.dart';
+import 'identification_screen.dart';
 
 /// Screen 3 - Add item, cutout review. The result on a `tile` background;
 /// actions Retake / Eraser / Continue (design.md section 6.3).
@@ -261,9 +261,12 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
         }
       }
       if (!mounted) return;
+      // Continue routes through the identification screen (screen 3.5):
+      // it runs the online lookup when keys are set and hands the draft
+      // paths - and any result - on to the details form.
       await Navigator.of(context).pushReplacement(
         appRoute(
-          DetailsFormScreen(
+          IdentificationScreen(
             draftOriginalPath: widget.draftOriginalPath,
             draftCutoutPath: cutoutPath,
           ),
