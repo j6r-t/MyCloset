@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../ui/app_state.dart';
 import '../ui/theme.dart';
+import '../widgets/brush_controls.dart';
 import 'capture_screen.dart';
 import 'details_form_screen.dart';
 
@@ -33,13 +35,19 @@ class CutoutReviewScreen extends StatefulWidget {
   State<CutoutReviewScreen> createState() => _CutoutReviewScreenState();
 }
 
-/// One eraser stroke in image coordinates, radius in image pixels.
+/// One eraser stroke: points and radius in image coordinates, plus the
+/// erase strength ([opacity], 0.0-1.0) the stroke was drawn with. The full
+/// spec is stored so undo replays the stroke exactly as drawn.
 class _EraseStroke {
   final List<Offset> points;
   final double radius;
+  final double opacity;
 
-  _EraseStroke(this.points, this.radius);
+  _EraseStroke(this.points, this.radius, {required this.opacity});
 }
+
+/// Which brush control is currently being dragged, if any.
+enum _IndicatorMode { none, size, opacity }
 
 class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
   /// The live cutout raster (base image with all strokes applied).
@@ -54,6 +62,25 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
 
   /// Stroke currently being drawn, for live preview.
   _EraseStroke? _activeStroke;
+
+  /// Brush thickness at display scale, in screen pixels across (the stamp
+  /// diameter the user sees). Stored in image coordinates as
+  /// size / 2 / [_scale].
+  double _brushSizePx = 40;
+
+  /// Erase strength in percent (10-100). The stamp's alpha.
+  int _brushOpacityPct = 100;
+
+  /// The control currently dragged - drives the indicator ring.
+  _IndicatorMode _indicatorMode = _IndicatorMode.none;
+
+  /// Display rect of the garment image inside the canvas area (set during
+  /// layout); the indicator anchor is clamped to it.
+  Rect _displayRect = Rect.zero;
+
+  /// Last-known touch position in canvas-local coordinates, or null before
+  /// the first touch (the indicator then sits at the canvas center).
+  Offset? _indicatorAnchor;
 
   /// Display mapping (set during layout).
   double _scale = 1;
@@ -99,18 +126,48 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
 
   Offset _toImage(Offset local) => (local - _imageOrigin) / _scale;
 
-  double _brushRadius() => 20.0 / _scale; // ~20px at display scale
+  /// Stamp radius in image pixels for the current brush thickness: the
+  /// slider is in display pixels across, so the same diameter appears on
+  /// screen (and in the indicator ring) as the stamp covers.
+  double _brushRadius() => (_brushSizePx / 2) / _scale;
+
+  /// Anchors the indicator ring at the last-known touch position, falling
+  /// back to the garment-image center before the first touch.
+  void _startIndicator(_IndicatorMode mode) {
+    setState(() {
+      _indicatorMode = mode;
+      _indicatorAnchor ??= _displayRect.center;
+    });
+  }
+
+  void _moveIndicatorTo(Offset local) {
+    if (_displayRect == Rect.zero) return;
+    setState(() {
+      _indicatorAnchor = Offset(
+        local.dx.clamp(_displayRect.left, _displayRect.right),
+        local.dy.clamp(_displayRect.top, _displayRect.bottom),
+      );
+    });
+  }
 
   void _onPanStart(DragStartDetails d) {
     if (!_erasing || _image == null) return;
     setState(() {
-      _activeStroke = _EraseStroke([_toImage(d.localPosition)], _brushRadius());
+      _activeStroke = _EraseStroke(
+        [_toImage(d.localPosition)],
+        _brushRadius(),
+        opacity: _brushOpacityPct / 100,
+      );
     });
+    _moveIndicatorTo(d.localPosition);
   }
 
   void _onPanUpdate(DragUpdateDetails d) {
     if (!_erasing || _activeStroke == null) return;
-    setState(() => _activeStroke!.points.add(_toImage(d.localPosition)));
+    setState(() {
+      _activeStroke!.points.add(_toImage(d.localPosition));
+    });
+    _moveIndicatorTo(d.localPosition);
   }
 
   Future<void> _onPanEnd(DragEndDetails d) async {
@@ -128,8 +185,9 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
     await _rerender();
   }
 
-  /// Composites the base cutout with all strokes (dstOut soft stamps) into a
-  /// fresh raster. No re-running the model (backend.md section 3.4).
+  /// Composites the base cutout with all strokes (dstOut hard stamps, each
+  /// at its stored opacity) into a fresh raster. No re-running the model
+  /// (backend.md section 3.4).
   Future<void> _rerender() async {
     if (_baseImage == null) return;
     final base = _baseImage!;
@@ -140,11 +198,14 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
     final erase = Paint()
       ..blendMode = BlendMode.dstOut
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+      ..strokeJoin = StrokeJoin.round
+      // Hard felt-tip edge: no maskFilter, only anti-aliasing. For dstOut
+      // the color is irrelevant - only the alpha carries the erase strength.
+      ..maskFilter = null;
 
     void paintStroke(_EraseStroke s) {
+      erase.color = Colors.black.withValues(alpha: s.opacity);
       if (s.points.length == 1) {
-        erase.maskFilter = MaskFilter.blur(BlurStyle.normal, s.radius * 0.35);
         canvas.drawCircle(s.points.first, s.radius, erase);
         return;
       }
@@ -153,7 +214,6 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
         path.lineTo(p.dx, p.dy);
       }
       erase.strokeWidth = s.radius * 2;
-      erase.maskFilter = MaskFilter.blur(BlurStyle.normal, s.radius * 0.35);
       canvas.drawPath(path, erase);
     }
 
@@ -295,6 +355,16 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                           (constraints.biggest.width - dispW) / 2,
                           (constraints.biggest.height - dispH) / 2,
                         );
+                        _displayRect = Rect.fromLTWH(
+                          _imageOrigin.dx,
+                          _imageOrigin.dy,
+                          dispW,
+                          dispH,
+                        );
+                        final mode = _indicatorMode;
+                        final showIndicator =
+                            mode != _IndicatorMode.none &&
+                            _displayRect != Rect.zero;
                         content = GestureDetector(
                           onPanStart: _onPanStart,
                           onPanUpdate: _onPanUpdate,
@@ -314,6 +384,29 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                                   ),
                                 ),
                               ),
+                              // Live brush indicator while a thickness or
+                              // opacity control is dragged: the ring's
+                              // diameter equals the brush size on screen
+                              // (same scale mapping as the stamp), at the
+                              // last-known touch position.
+                              if (showIndicator)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: _BrushIndicatorPainter(
+                                        center:
+                                            _indicatorAnchor ??
+                                            _displayRect.center,
+                                        diameter: _brushSizePx,
+                                        fillAlpha:
+                                            mode == _IndicatorMode.opacity
+                                            ? _brushOpacityPct / 100
+                                            : 0,
+                                        ink: c.ink,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         );
@@ -344,6 +437,55 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                   ),
                 ),
               ),
+              // Eraser brush controls: thickness + opacity. Dragging either
+              // shows the live indicator ring on the canvas.
+              if (_showEraser && _hasCutout)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Spacing.gutter,
+                    0,
+                    Spacing.gutter,
+                    Spacing.s,
+                  ),
+                  child: Column(
+                    children: [
+                      BrushControlRow(
+                        icon: AppIcons.brush,
+                        label: 'Brush size',
+                        value: _brushSizePx,
+                        min: 8,
+                        max: 64,
+                        divisions: 28,
+                        caption: '${_brushSizePx.round()}',
+                        onChangeStart: () =>
+                            _startIndicator(_IndicatorMode.size),
+                        onChanged: (v) => setState(() {
+                          _brushSizePx = v;
+                        }),
+                        onChangeEnd: () => setState(() {
+                          _indicatorMode = _IndicatorMode.none;
+                        }),
+                      ),
+                      BrushControlRow(
+                        icon: Symbols.opacity,
+                        label: 'Eraser opacity',
+                        value: _brushOpacityPct.toDouble(),
+                        min: 10,
+                        max: 100,
+                        divisions: 90,
+                        caption: '$_brushOpacityPct%',
+                        onChangeStart: () =>
+                            _startIndicator(_IndicatorMode.opacity),
+                        onChanged: (v) => setState(() {
+                          _brushOpacityPct = v.round();
+                        }),
+                        onChangeEnd: () => setState(() {
+                          _indicatorMode = _IndicatorMode.none;
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(
                   Spacing.gutter,
@@ -420,7 +562,16 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                     Expanded(
                       child: FilledButton(
                         onPressed: _busy ? null : _continue,
-                        child: Text('Continue', style: AppText.button(context)),
+                        // Ink fill pairs with white content (design.md
+                        // section 1); the disabled tile fill pairs with
+                        // ink-secondary.
+                        child: Text(
+                          'Continue',
+                          style: AppText.button(
+                            context,
+                            color: _busy ? c.inkSecondary : c.bg,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -435,7 +586,8 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
 }
 
 /// Paints the cutout and the in-progress eraser stroke. Strokes erase alpha
-/// (dstOut) with a soft round stamp (blur softening, backend.md section 3.4).
+/// (dstOut) with a hard round stamp - anti-aliased, no blur feathering
+/// (backend.md section 3.4).
 class _CutoutPainter extends CustomPainter {
   final ui.Image image;
   final _EraseStroke? activeStroke;
@@ -460,15 +612,13 @@ class _CutoutPainter extends CustomPainter {
     final erase = Paint()
       ..blendMode = BlendMode.dstOut
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = null;
 
     final stroke = activeStroke;
     if (stroke != null) {
+      erase.color = Colors.black.withValues(alpha: stroke.opacity);
       erase.strokeWidth = stroke.radius * 2;
-      erase.maskFilter = MaskFilter.blur(
-        BlurStyle.normal,
-        stroke.radius * 0.35,
-      );
       if (stroke.points.length == 1) {
         canvas.drawCircle(stroke.points.first, stroke.radius, erase);
       } else {
@@ -486,4 +636,62 @@ class _CutoutPainter extends CustomPainter {
   @override
   bool shouldRepaint(_CutoutPainter old) =>
       old.image != image || old.activeStroke != activeStroke;
+}
+
+/// The live brush indicator ring shown while a thickness or opacity control
+/// is dragged. Drawn in the canvas' local coordinates; [diameter] is in
+/// display pixels, matching exactly what the stamp covers on screen
+/// (radius * 2 * scale). Size mode is a bare ring; opacity mode fills the
+/// interior with black at the current erase alpha.
+class _BrushIndicatorPainter extends CustomPainter {
+  final Offset center;
+  final double diameter;
+
+  /// 0.0-1.0; 0 renders no fill (thickness mode).
+  final double fillAlpha;
+
+  final Color ink;
+
+  _BrushIndicatorPainter({
+    required this.center,
+    required this.diameter,
+    required this.fillAlpha,
+    required this.ink,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = diameter / 2;
+    if (fillAlpha > 0) {
+      canvas.drawCircle(
+        center,
+        r,
+        Paint()..color = Colors.black.withValues(alpha: fillAlpha),
+      );
+    }
+    // Subtle white inner/outer outline so the ring reads on any background,
+    // then the ink hairline ring on top.
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = Colors.white,
+    );
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = ink,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_BrushIndicatorPainter old) =>
+      old.center != center ||
+      old.diameter != diameter ||
+      old.fillAlpha != fillAlpha;
 }

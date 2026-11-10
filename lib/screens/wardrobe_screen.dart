@@ -80,8 +80,7 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
       if (_categories.isNotEmpty && !_categories.contains(item.category)) {
         return false;
       }
-      if (_types.isNotEmpty &&
-          !_types.contains(item.subtype ?? '')) {
+      if (_types.isNotEmpty && !_types.contains(item.subtype ?? '')) {
         return false;
       }
       if (_colors.isNotEmpty &&
@@ -99,9 +98,9 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
   }
 
   Future<void> _startAddFlow() async {
-    final newId = await Navigator.of(context).push<int>(
-      appRoute(const CaptureScreen()),
-    );
+    final newId = await Navigator.of(
+      context,
+    ).push<int>(appRoute(const CaptureScreen()));
     if (newId != null && mounted) {
       setState(() => _highlightItemId = newId);
       _highlightClear?.cancel();
@@ -133,53 +132,50 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
     return SafeArea(
       bottom: false,
       child: CustomScrollView(
-      slivers: [
-        const SliverToBoxAdapter(child: SizedBox(height: Spacing.s)),
-        SliverToBoxAdapter(child: _header(context, items)),
-        SliverPersistentHeader(
-          pinned: true,
-          delegate: _FilterHeaderDelegate(
-            child: _filterBar(context, filtered.length),
-          ),
-        ),
-        if (filtered.isEmpty)
-          const SliverFillRemaining(
-            hasScrollBody: false,
-            child: EmptyState(
-              statement: 'Nothing matches.',
-              sub: 'Try widening the filters.',
+        slivers: [
+          const SliverToBoxAdapter(child: SizedBox(height: Spacing.s)),
+          SliverToBoxAdapter(child: _header(context, items)),
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _FilterHeaderDelegate(
+              child: _filterBar(context, filtered.length),
             ),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(0, Spacing.s, 0, 148),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: Spacing.gridGap,
-                mainAxisSpacing: Spacing.gridGap,
-                childAspectRatio: 0.75,
+          ),
+          if (filtered.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: EmptyState(
+                statement: 'Nothing matches.',
+                sub: 'Try widening the filters.',
               ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(0, Spacing.s, 0, 148),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: Spacing.gridGap,
+                  mainAxisSpacing: Spacing.gridGap,
+                  childAspectRatio: 0.75,
+                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
                   if (index == 0) return _AddPieceTile(onTap: _startAddFlow);
                   final item = filtered[index - 1];
                   return ItemTile(
                     item: item,
                     highlight: item.id == _highlightItemId,
                     onTap: () async {
-                      await Navigator.of(context).push(
-                        appRoute(ItemDetailScreen(item: item)),
-                      );
+                      await Navigator.of(
+                        context,
+                      ).push(appRoute(ItemDetailScreen(item: item)));
                     },
                     onLongPress: () => _showTileActions(item),
                   );
-                },
-                childCount: filtered.length + 1,
+                }, childCount: filtered.length + 1),
               ),
             ),
-          ),
-      ],
+        ],
       ),
     );
   }
@@ -243,9 +239,8 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
                         ..clear()
                         ..addAll(
                           values.map(
-                            (v) => Category.values.firstWhere(
-                              (x) => x.name == v,
-                            ),
+                            (v) =>
+                                Category.values.firstWhere((x) => x.name == v),
                           ),
                         );
                     }),
@@ -318,7 +313,10 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          Text('$resultCount items', style: AppText.caption(context, color: c.inkSecondary)),
+          Text(
+            '$resultCount items',
+            style: AppText.caption(context, color: c.inkSecondary),
+          ),
         ],
       ),
     );
@@ -344,7 +342,8 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
     }
     return [
       for (final named in kNamedColors)
-        if (used.contains(named.name)) _FilterOption(named.name, named.name, swatchHex: named.hex),
+        if (used.contains(named.name))
+          _FilterOption(named.name, named.name, swatchHex: named.hex),
     ];
   }
 
@@ -375,7 +374,10 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(title, style: AppText.title(sheetContext)),
+                          child: Text(
+                            title,
+                            style: AppText.title(sheetContext),
+                          ),
                         ),
                         IconButton(
                           onPressed: () => Navigator.of(sheetContext).pop(),
@@ -409,7 +411,15 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
                     FilledButton(
                       onPressed: () =>
                           Navigator.of(sheetContext).pop(local.toSet()),
-                      child: Text('Apply', style: AppText.button(sheetContext)),
+                      // Ink fill pairs with white content (design.md
+                      // section 1).
+                      child: Text(
+                        'Apply',
+                        style: AppText.button(
+                          sheetContext,
+                          color: AppColors.of(sheetContext).bg,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -463,9 +473,9 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
     if (action == null || !mounted) return;
 
     if (action == 'edit') {
-      await Navigator.of(context).push(
-        appRoute(DetailsFormScreen(existing: item)),
-      );
+      await Navigator.of(
+        context,
+      ).push(appRoute(DetailsFormScreen(existing: item)));
     } else if (action == 'delete') {
       // Destructive: confirm first, same sheet as the detail page
       // (userFlow.md flow 4, step 3).
@@ -543,11 +553,12 @@ class _FilterHeaderDelegate extends SliverPersistentHeaderDelegate {
   double get maxExtent => 92;
 
   @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: AppColors.of(context).bg,
-      child: child,
-    );
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Container(color: AppColors.of(context).bg, child: child);
   }
 
   @override

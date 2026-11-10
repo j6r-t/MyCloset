@@ -95,7 +95,15 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                   FilledButton(
                     onPressed: () =>
                         Navigator.of(sheetContext).pop(controller.text.trim()),
-                    child: Text('Save', style: AppText.button(sheetContext)),
+                    // Ink fill pairs with white content (design.md
+                    // section 1).
+                    child: Text(
+                      'Save',
+                      style: AppText.button(
+                        sheetContext,
+                        color: AppColors.of(sheetContext).bg,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -249,11 +257,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
           icon: const Icon(AppIcons.back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text(
-          item.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
@@ -283,20 +287,22 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               Expanded(
                 flex: 2,
                 child: FilledButton(
-                  onPressed: () => Navigator.of(context).push(
-                    appRoute(
-                      OutfitBuilderScreen(seedItem: item),
-                    ),
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).push(appRoute(OutfitBuilderScreen(seedItem: item))),
+                  // Ink fill pairs with white content (design.md section 1).
+                  child: Text(
+                    'Create fit',
+                    style: AppText.button(context, color: c.bg),
                   ),
-                  child: Text('Create fit', style: AppText.button(context)),
                 ),
               ),
               const SizedBox(width: Spacing.s),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => Navigator.of(context).push(
-                    appRoute(DetailsFormScreen(existing: item)),
-                  ),
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).push(appRoute(DetailsFormScreen(existing: item))),
                   child: Text('Edit', style: AppText.button(context)),
                 ),
               ),
@@ -323,16 +329,17 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               item,
               title: 'Value (TND)',
               initial: item.price?.toString(),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               onSave: (value) => _updateItem(
-                item.copyWith(price: double.tryParse(value.replaceAll(',', '.'))),
+                item.copyWith(
+                  price: double.tryParse(value.replaceAll(',', '.')),
+                ),
               ),
             ),
             value: Text(
-              item.price == null
-                  ? '—'
-                  : '${_formatPrice(item.price!)} TND',
+              item.price == null ? '—' : '${_formatPrice(item.price!)} TND',
               style: AppText.value(context, color: c.money),
             ),
           ),
@@ -344,7 +351,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               item,
               title: 'Brand',
               initial: item.brand,
-              onSave: (value) => _updateItem(item.copyWith(brand: _nullIfEmpty(value))),
+              onSave: (value) =>
+                  _updateItem(item.copyWith(brand: _nullIfEmpty(value))),
             ),
             value: Text(item.brand ?? '—', style: AppText.value(context)),
           ),
@@ -356,7 +364,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               item,
               title: 'Type',
               initial: item.subtype,
-              onSave: (value) => _updateItem(item.copyWith(subtype: _nullIfEmpty(value))),
+              onSave: (value) =>
+                  _updateItem(item.copyWith(subtype: _nullIfEmpty(value))),
             ),
             value: Text(item.subtype ?? '—', style: AppText.value(context)),
           ),
@@ -373,8 +382,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                   // layer_type is null outside top/outerwear.
                   layerType:
                       value == Category.top || value == Category.outerwear
-                          ? item.layerType
-                          : null,
+                      ? item.layerType
+                      : null,
                 ),
               ),
             ),
@@ -388,7 +397,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               item,
               title: 'Size',
               initial: item.size,
-              onSave: (value) => _updateItem(item.copyWith(size: _nullIfEmpty(value))),
+              onSave: (value) =>
+                  _updateItem(item.copyWith(size: _nullIfEmpty(value))),
             ),
             value: Text(item.size ?? '—', style: AppText.value(context)),
           ),
@@ -435,7 +445,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                 item,
                 title: 'Fabric',
                 initial: item.fabric,
-                onSave: (value) => _updateItem(item.copyWith(fabric: _nullIfEmpty(value))),
+                onSave: (value) =>
+                    _updateItem(item.copyWith(fabric: _nullIfEmpty(value))),
               ),
               value: Text(item.fabric!, style: AppText.value(context)),
             ),
@@ -449,7 +460,8 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                 title: 'Notes',
                 initial: item.notes,
                 multiline: true,
-                onSave: (value) => _updateItem(item.copyWith(notes: _nullIfEmpty(value))),
+                onSave: (value) =>
+                    _updateItem(item.copyWith(notes: _nullIfEmpty(value))),
               ),
               value: Text(item.notes!, style: AppText.value(context)),
             ),

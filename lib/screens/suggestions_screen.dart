@@ -53,11 +53,7 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
 
     if (!mounted) return;
     final engine = SuggestionEngine(palettes: _palettes!);
-    var results = engine.suggest(
-      state.items,
-      exclude: _shown,
-      limit: 3,
-    );
+    var results = engine.suggest(state.items, exclude: _shown, limit: 3);
     var exhausted = false;
     if (results.isEmpty && _shown.isNotEmpty) {
       // Pool exhausted: reset the cycle (userFlow.md flow 6, step 3).
@@ -82,9 +78,9 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
     try {
       await state.createOutfit(name, suggestion.slots);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved "$name" to outfits')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Saved "$name" to outfits')));
       }
     } catch (e) {
       if (mounted) {
@@ -97,8 +93,18 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
 
   String _defaultName() {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final now = DateTime.now();
     return 'Outfit · ${months[now.month - 1]} ${now.day}';
@@ -108,13 +114,14 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
   Widget build(BuildContext context) {
     final state = AppStateScope.of(context);
 
-
     final coreItems = state.items
-        .where((item) =>
-            item.category == Category.dress ||
-            item.category == Category.top ||
-            item.category == Category.bottom ||
-            item.category == Category.shoes)
+        .where(
+          (item) =>
+              item.category == Category.dress ||
+              item.category == Category.top ||
+              item.category == Category.bottom ||
+              item.category == Category.shoes,
+        )
         .toList();
 
     Widget body;
@@ -161,31 +168,29 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
     return SafeArea(
       bottom: false,
       child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Tab-root title row with the shuffle action.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            Spacing.gutter,
-            Spacing.m,
-            Spacing.gutter,
-            0,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Tab-root title row with the shuffle action.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Spacing.gutter,
+              Spacing.m,
+              Spacing.gutter,
+              0,
+            ),
+            child: Row(
+              children: [
+                Expanded(child: Text('Suggest', style: AppText.title(context))),
+                IconButton(
+                  icon: const Icon(AppIcons.shuffle, size: 22),
+                  tooltip: 'Shuffle',
+                  onPressed: coreItems.length < 2 ? null : _generate,
+                ),
+              ],
+            ),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text('Suggest', style: AppText.title(context)),
-              ),
-              IconButton(
-                icon: const Icon(AppIcons.shuffle, size: 22),
-                tooltip: 'Shuffle',
-                onPressed: coreItems.length < 2 ? null : _generate,
-              ),
-            ],
-          ),
-        ),
-        Expanded(child: body),
-      ],
+          Expanded(child: body),
+        ],
       ),
     );
   }
@@ -217,9 +222,7 @@ class _SuggestionColumn extends StatelessWidget {
           SizedBox(
             width: 132,
             height: 300,
-            child: FlatLayColumn(
-              items: FlatLayColumn.ordered(slots),
-            ),
+            child: FlatLayColumn(items: FlatLayColumn.ordered(slots)),
           ),
           const SizedBox(width: Spacing.m),
           Expanded(
@@ -228,10 +231,7 @@ class _SuggestionColumn extends StatelessWidget {
               children: [
                 Text(
                   reason.isNotEmpty ? reason : 'A quiet combination',
-                  style: AppText.fieldLabel(
-                    context,
-                    color: c.inkSecondary,
-                  ),
+                  style: AppText.fieldLabel(context, color: c.inkSecondary),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -294,7 +294,12 @@ class _SuggestionSkeleton extends StatelessWidget {
               const SizedBox(height: Spacing.m),
               FilledButton(
                 onPressed: null,
-                child: Text('Save', style: AppText.button(context)),
+                // Skeleton placeholder: always disabled, so the tile fill
+                // pairs with ink-secondary (design.md section 1).
+                child: Text(
+                  'Save',
+                  style: AppText.button(context, color: c.inkSecondary),
+                ),
               ),
             ],
           ),

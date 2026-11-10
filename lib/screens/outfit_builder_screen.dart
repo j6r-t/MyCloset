@@ -94,7 +94,8 @@ class _OutfitBuilderScreenState extends State<OutfitBuilderScreen> {
 
   bool get _torsoValid =>
       _slots.containsKey(OutfitSlot.dress) ||
-      (_slots.containsKey(OutfitSlot.top) && _slots.containsKey(OutfitSlot.bottom));
+      (_slots.containsKey(OutfitSlot.top) &&
+          _slots.containsKey(OutfitSlot.bottom));
 
   bool get _canSave => _slots.isNotEmpty && _torsoValid;
 
@@ -116,11 +117,7 @@ class _OutfitBuilderScreenState extends State<OutfitBuilderScreen> {
 
     try {
       if (widget.existingOutfitId != null) {
-        await state.replaceOutfit(
-          widget.existingOutfitId!,
-          name,
-          _slots,
-        );
+        await state.replaceOutfit(widget.existingOutfitId!, name, _slots);
       } else {
         await state.createOutfit(name, _slots);
       }
@@ -138,8 +135,18 @@ class _OutfitBuilderScreenState extends State<OutfitBuilderScreen> {
   /// "Outfit · Nov 9" per userFlow.md flow 5, step 6.
   String _defaultName() {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final now = DateTime.now();
     return 'Outfit · ${months[now.month - 1]} ${now.day}';
@@ -246,7 +253,12 @@ class _OutfitBuilderScreenState extends State<OutfitBuilderScreen> {
             onPressed: _canSave && !_saving ? _save : null,
             child: Text(
               widget.existingOutfitId != null ? 'Save changes' : 'Save outfit',
-              style: AppText.button(context),
+              // Ink fill pairs with white content (design.md section 1);
+              // the disabled tile fill pairs with ink-secondary.
+              style: AppText.button(
+                context,
+                color: _canSave && !_saving ? c.bg : c.inkSecondary,
+              ),
             ),
           ),
         ],
@@ -281,7 +293,9 @@ class _SlotChip extends StatelessWidget {
     };
     final name = item?.name;
     if (name == null) return base;
-    return name.length > 18 ? '$base · ${name.substring(0, 18)}…' : '$base · $name';
+    return name.length > 18
+        ? '$base · ${name.substring(0, 18)}…'
+        : '$base · $name';
   }
 
   @override
@@ -303,10 +317,9 @@ class _SlotChip extends StatelessWidget {
           children: [
             Text(
               _label,
-              style: AppText.button(context).copyWith(
-                fontSize: 13,
-                color: filled ? c.ink : c.inkSecondary,
-              ),
+              style: AppText.button(
+                context,
+              ).copyWith(fontSize: 13, color: filled ? c.ink : c.inkSecondary),
             ),
             if (filled) ...[
               const SizedBox(width: 8),
@@ -409,21 +422,23 @@ class _SlotItemPickerState extends State<_SlotItemPicker> {
                       shrinkWrap: true,
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: Spacing.gridGap,
-                        mainAxisSpacing: Spacing.gridGap,
-                        childAspectRatio: 0.75,
-                      ),
+                            crossAxisCount: 3,
+                            crossAxisSpacing: Spacing.gridGap,
+                            mainAxisSpacing: Spacing.gridGap,
+                            childAspectRatio: 0.75,
+                          ),
                       itemCount: candidates.length,
                       itemBuilder: (context, index) {
                         final item = candidates[index];
                         return GestureDetector(
-                          onTap: () =>
-                              Navigator.of(context).pop(item),
+                          onTap: () => Navigator.of(context).pop(item),
                           child: Container(
                             color: c.tileWhisper,
                             padding: const EdgeInsets.all(8),
-                            child: CutoutImage(path: item.cutoutPath, iconSize: 20),
+                            child: CutoutImage(
+                              path: item.cutoutPath,
+                              iconSize: 20,
+                            ),
                           ),
                         );
                       },

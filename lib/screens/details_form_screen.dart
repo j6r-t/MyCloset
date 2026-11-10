@@ -193,8 +193,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                       FilterPill(
                         label: value.name,
                         active: value == selected,
-                        onTap: () =>
-                            Navigator.of(sheetContext).pop(value),
+                        onTap: () => Navigator.of(sheetContext).pop(value),
                       ),
                   ],
                 ),
@@ -365,7 +364,10 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                 ),
               ),
               _Row(label: 'Brand', child: _textField(_brand)),
-              _Row(label: 'Type', child: _textField(_subtype, hint: 't-shirt, blazer…')),
+              _Row(
+                label: 'Type',
+                child: _textField(_subtype, hint: 't-shirt, blazer…'),
+              ),
               _Row(
                 label: 'Garment Type',
                 child: Row(
@@ -394,7 +396,10 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                   });
                 },
               ),
-              _Row(label: 'Size', child: _textField(_size, hint: 'M, 40…')),
+              _Row(
+                label: 'Size',
+                child: _textField(_size, hint: 'M, 40…'),
+              ),
               if (_canLayer)
                 _Row(
                   label: 'Layer Type',
@@ -407,8 +412,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                           active: _layerType == layer,
                           compact: true,
                           onTap: () => setState(() {
-                            _layerType =
-                                _layerType == layer ? null : layer;
+                            _layerType = _layerType == layer ? null : layer;
                           }),
                         ),
                     ],
@@ -455,7 +459,11 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                             _secondaryHex = null;
                             _secondaryName = null;
                           }),
-                          child: Icon(AppIcons.close, size: 20, color: c.inkSecondary),
+                          child: Icon(
+                            AppIcons.close,
+                            size: 20,
+                            color: c.inkSecondary,
+                          ),
                         ),
                       ],
                     ),
@@ -489,7 +497,15 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
               const SizedBox(height: Spacing.section),
               FilledButton(
                 onPressed: _saving ? null : _save,
-                child: Text('Save item', style: AppText.button(context)),
+                // Ink fill pairs with white content (design.md section 1);
+                // the disabled tile fill pairs with ink-secondary.
+                child: Text(
+                  'Save item',
+                  style: AppText.button(
+                    context,
+                    color: _saving ? c.inkSecondary : c.bg,
+                  ),
+                ),
               ),
             ],
           ),
@@ -544,7 +560,9 @@ class _Row extends StatelessWidget {
       ),
       child: GestureDetector(
         onTap: onTap,
-        behavior: onTap == null ? HitTestBehavior.deferToChild : HitTestBehavior.opaque,
+        behavior: onTap == null
+            ? HitTestBehavior.deferToChild
+            : HitTestBehavior.opaque,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -587,9 +605,7 @@ class FilterPill extends StatelessWidget {
         duration: Motion.fast,
         curve: Motion.curve,
         height: compact ? 32 : 36,
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 12 : Spacing.m,
-        ),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 12 : Spacing.m),
         decoration: BoxDecoration(
           color: active ? c.ink : Colors.transparent,
           borderRadius: BorderRadius.circular(24),
