@@ -1,0 +1,483 @@
+import 'package:drift/drift.dart';
+import 'package:drift_flutter/drift_flutter.dart';
+
+import '../models/enums.dart';
+import '../models/item.dart';
+import '../models/outfit.dart';
+
+// ---------------------------------------------------------------------------
+// Schema (docs/backend.md 2.1)
+//
+// This project runs drift WITHOUT code generation (no build_runner), so the
+// tables below serve as the executable schema documentation while the DDL
+// statements in [schemaStatements] create the actual tables. The two must
+// stay in sync; the CHECK constraints in the SQL mirror the enums in
+// lib/models/enums.dart.
+//
+// Schema version history starts at 1. v2 (2026-11-10) added items.size and
+// items.layer_type (docs/backend.md 2.1); SQLite cannot add a CHECK via
+// ALTER TABLE, so migrated databases have the layer_type CHECK enforced at
+// app level (see [_assertLayerTypeAllowed]) while fresh installs get it in
+// the DDL directly. Never edit an applied migration: append a new step to
+// [AppDatabase.migration]'s onUpgrade instead.
+// ---------------------------------------------------------------------------
+
+/// `items` table definition (see [schemaStatements] for the DDL).
+class ItemsTable extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get name => text()();
+  TextColumn get category => text()(); // CHECK: one of the 6 Category values
+  TextColumn get subtype => text().nullable()();
+  TextColumn get brand => text().nullable()();
+  RealColumn get price => real().nullable()(); // TND
+  TextColumn get size => text().nullable()(); // v2: free-text size label
+  // v2: null except top/outerwear; CHECK mirrored in the v2 DDL and enforced
+  // at app level on migrated databases.
+  TextColumn get layerType => text().nullable()();
+  TextColumn get season => text().withDefault(const Constant('all'))();
+  TextColumn get fabric => text().nullable()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get colorPrimaryHex => text()();
+  TextColumn get colorPrimaryName => text().nullable()();
+  TextColumn get colorSecondaryHex => text().nullable()();
+  TextColumn get colorSecondaryName => text().nullable()();
+  TextColumn get imagePath => text()();
+  TextColumn get cutoutPath => text()();
+  IntColumn get createdAt => integer()(); // epoch milliseconds
+}
+
+/// `outfits` table definition.
+class OutfitsTable extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get name => text()();
+  IntColumn get createdAt => integer()(); // epoch milliseconds
+}
+
+/// `outfit_items` table definition. Primary key is (outfitId, slot).
+class OutfitItemsTable extends Table {
+  IntColumn get outfitId =>
+      integer().references(OutfitsTable, #id)();
+  IntColumn get itemId => integer().references(ItemsTable, #id)();
+  TextColumn get slot => text()(); // CHECK: one of the 6 OutfitSlot values
+
+  @override
+  Set<Column> get primaryKey => {outfitId, slot};
+}
+
+/// The drift database for MyCloset.
+///
+/// Because no code generation is used, typed access goes through the query
+/// methods below, which map raw rows to the plain model classes in
+/// lib/models/. Open the app database with [AppDatabase.open]; tests inject
+/// their own executor (e.g. an in-memory NativeDatabase).
+class AppDatabase extends GeneratedDatabase {
+  /// Opens the production database: `closet.sqlite` in the app documents
+  /// directory (drift_flutter's default location; the backup service relies
+  /// on this path).
+  factory AppDatabase.open() => AppDatabase(driftDatabase(name: 'closet'));
+
+  AppDatabase(super.executor);
+
+  @override
+  int get schemaVersion => 2;
+
+  @override
+  Iterable<TableInfo> get allTables => const [];
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          for (final statement in schemaStatements) {
+            await customStatement(statement);
+          }
+        },
+        onUpgrade: (m, from, to) async {
+          // Add future versions as incremental steps below and raise
+          // [schemaVersion]; never edit an existing step.
+          if (from < 2) {
+            // v1 -> v2 (docs/backend.md 2.1): the two new item columns.
+            // SQLite cannot add a CHECK constraint with ALTER TABLE, so the
+            // layer_type values are validated in [_assertLayerTypeAllowed]
+            // on every write instead.
+            await customStatement('ALTER TABLE items ADD COLUMN size TEXT');
+            await customStatement(
+              'ALTER TABLE items ADD COLUMN layer_type TEXT',
+            );
+          }
+        },
+        beforeOpen: (details) async {
+          // Enforce the FK cascade declared in the DDL (item deletion
+          // removes its outfit_items rows; outfit deletion removes all its
+          // slot rows).
+          await customStatement('PRAGMA foreign_keys = ON');
+        },
+      );
+
+  /// DDL for schema version 2 (fresh installs), matching docs/backend.md
+  /// 2.1 exactly. Unlike the ALTER-based migration path this can carry the
+  /// layer_type CHECK constraint.
+  static const List<String> schemaStatements = [
+    '''
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('top','bottom','dress','shoes','outerwear','accessory')),
+      subtype TEXT,
+      brand TEXT,
+      price REAL,
+      size TEXT,
+      layer_type TEXT CHECK (layer_type IN ('inner','outer','both')),
+      season TEXT NOT NULL DEFAULT 'all' CHECK (season IN ('summer','winter','all')),
+      fabric TEXT,
+      notes TEXT,
+      color_primary_hex TEXT NOT NULL,
+      color_primary_name TEXT,
+      color_secondary_hex TEXT,
+      color_secondary_name TEXT,
+      image_path TEXT NOT NULL,
+      cutout_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)',
+    'CREATE INDEX IF NOT EXISTS idx_items_season ON items(season)',
+    '''
+    CREATE TABLE IF NOT EXISTS outfits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS outfit_items (
+      outfit_id INTEGER NOT NULL REFERENCES outfits(id) ON DELETE CASCADE,
+      item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL CHECK (slot IN ('dress','top','bottom','shoes','outerwear','accessory')),
+      PRIMARY KEY (outfit_id, slot)
+    )
+    ''',
+  ];
+
+  /// DDL for schema version 1, exactly as it shipped. Nothing at runtime
+  /// executes this; it exists so the migration test can build a genuine v1
+  /// database file and verify the v1 -> v2 upgrade against it. Kept in sync
+  /// with the [schemaStatements] tables minus the v2 columns.
+  static const List<String> schemaV1Statements = [
+    '''
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('top','bottom','dress','shoes','outerwear','accessory')),
+      subtype TEXT,
+      brand TEXT,
+      price REAL,
+      season TEXT NOT NULL DEFAULT 'all' CHECK (season IN ('summer','winter','all')),
+      fabric TEXT,
+      notes TEXT,
+      color_primary_hex TEXT NOT NULL,
+      color_primary_name TEXT,
+      color_secondary_hex TEXT,
+      color_secondary_name TEXT,
+      image_path TEXT NOT NULL,
+      cutout_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)',
+    'CREATE INDEX IF NOT EXISTS idx_items_season ON items(season)',
+    '''
+    CREATE TABLE IF NOT EXISTS outfits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS outfit_items (
+      outfit_id INTEGER NOT NULL REFERENCES outfits(id) ON DELETE CASCADE,
+      item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL CHECK (slot IN ('dress','top','bottom','shoes','outerwear','accessory')),
+      PRIMARY KEY (outfit_id, slot)
+    )
+    ''',
+  ];
+
+  // ------------------------------------------------------------------ items
+
+  /// Throws when [layerType] is set on a category that cannot layer
+  /// (docs/backend.md 2.1: layer_type is null except for top/outerwear).
+  /// This is the app-level CHECK that replaces the DDL constraint on
+  /// databases migrated from schema v1, where ALTER TABLE cannot add a
+  /// CHECK; fresh installs have both.
+  static void _assertLayerTypeAllowed(Category category, LayerType? layerType) {
+    final layers = category == Category.top || category == Category.outerwear;
+    if (layerType != null && !layers) {
+      throw ArgumentError.value(
+        layerType,
+        'layerType',
+        'layer_type is only valid for top and outerwear items, '
+            'not ${category.name}',
+      );
+    }
+  }
+
+  /// Inserts an item row and returns its generated id.
+  Future<int> insertItem({
+    required String name,
+    required Category category,
+    String? subtype,
+    String? brand,
+    double? price,
+    String? size,
+    LayerType? layerType,
+    Season season = Season.all,
+    String? fabric,
+    String? notes,
+    required String colorPrimaryHex,
+    String? colorPrimaryName,
+    String? colorSecondaryHex,
+    String? colorSecondaryName,
+    required String imagePath,
+    required String cutoutPath,
+    DateTime? createdAt,
+  }) {
+    _assertLayerTypeAllowed(category, layerType);
+    return customInsert(
+      '''
+      INSERT INTO items (
+        name, category, subtype, brand, price, size, layer_type, season,
+        fabric, notes, color_primary_hex, color_primary_name,
+        color_secondary_hex, color_secondary_name, image_path, cutout_path,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ''',
+      variables: [
+        Variable(name),
+        Variable(category.name),
+        Variable(subtype),
+        Variable(brand),
+        Variable(price),
+        Variable(size),
+        Variable(layerType?.name),
+        Variable(season.name),
+        Variable(fabric),
+        Variable(notes),
+        Variable(colorPrimaryHex),
+        Variable(colorPrimaryName),
+        Variable(colorSecondaryHex),
+        Variable(colorSecondaryName),
+        Variable(imagePath),
+        Variable(cutoutPath),
+        Variable(
+          (createdAt ?? DateTime.now()).millisecondsSinceEpoch,
+        ),
+      ],
+    );
+  }
+
+  Future<Item?> getItem(int id) async {
+    final rows = await customSelect(
+      'SELECT * FROM items WHERE id = ?',
+      variables: [Variable(id)],
+    ).get();
+    return rows.isEmpty ? null : _itemFromRow(rows.first);
+  }
+
+  /// All items, newest first (the wardrobe grid's default sort).
+  Future<List<Item>> getAllItems() async {
+    final rows = await customSelect(
+      'SELECT * FROM items ORDER BY created_at DESC, id DESC',
+    ).get();
+    return rows.map(_itemFromRow).toList();
+  }
+
+  Future<List<Item>> getItemsByCategory(Category category) async {
+    final rows = await customSelect(
+      'SELECT * FROM items WHERE category = ? ORDER BY created_at DESC',
+      variables: [Variable(category.name)],
+    ).get();
+    return rows.map(_itemFromRow).toList();
+  }
+
+  /// Rewrites all editable fields of an item from its model.
+  Future<void> updateItem(Item item) {
+    _assertLayerTypeAllowed(item.category, item.layerType);
+    return customStatement(
+      '''
+      UPDATE items SET
+        name = ?, category = ?, subtype = ?, brand = ?, price = ?,
+        size = ?, layer_type = ?, season = ?, fabric = ?, notes = ?,
+        color_primary_hex = ?, color_primary_name = ?,
+        color_secondary_hex = ?, color_secondary_name = ?,
+        image_path = ?, cutout_path = ?
+      WHERE id = ?
+      ''',
+      [
+        item.name,
+        item.category.name,
+        item.subtype,
+        item.brand,
+        item.price,
+        item.size,
+        item.layerType?.name,
+        item.season.name,
+        item.fabric,
+        item.notes,
+        item.colorPrimaryHex,
+        item.colorPrimaryName,
+        item.colorSecondaryHex,
+        item.colorSecondaryName,
+        item.imagePath,
+        item.cutoutPath,
+        item.id,
+      ],
+    );
+  }
+
+  /// Deletes an item and its outfit_items rows in one transaction. The
+  /// outfit itself keeps its other slots (the emptied slot renders as a
+  /// dashed "missing item" placeholder per userFlow.md).
+  Future<void> deleteItem(int id) {
+    return transaction(() async {
+      await customStatement(
+        'DELETE FROM outfit_items WHERE item_id = ?',
+        [id],
+      );
+      await customStatement('DELETE FROM items WHERE id = ?', [id]);
+    });
+  }
+
+  Future<int> countItems() async {
+    final rows = await customSelect('SELECT COUNT(*) AS c FROM items').get();
+    return rows.first.read<int>('c');
+  }
+
+  // ---------------------------------------------------------------- outfits
+
+  /// Inserts an outfit and returns its generated id.
+  ///
+  /// [name] is optional; the UI defaults it to something like
+  /// "Outfit · Nov 9" per userFlow.md flow 5.
+  Future<int> insertOutfit(String name, {DateTime? createdAt}) {
+    return customInsert(
+      'INSERT INTO outfits (name, created_at) VALUES (?, ?)',
+      variables: [
+        Variable(name),
+        Variable((createdAt ?? DateTime.now()).millisecondsSinceEpoch),
+      ],
+    );
+  }
+
+  Future<List<Outfit>> getAllOutfits() async {
+    final rows = await customSelect(
+      'SELECT * FROM outfits ORDER BY created_at DESC, id DESC',
+    ).get();
+    return rows.map(_outfitFromRow).toList();
+  }
+
+  Future<Outfit?> getOutfit(int id) async {
+    final rows = await customSelect(
+      'SELECT * FROM outfits WHERE id = ?',
+      variables: [Variable(id)],
+    ).get();
+    return rows.isEmpty ? null : _outfitFromRow(rows.first);
+  }
+
+  Future<void> deleteOutfit(int id) {
+    return transaction(() async {
+      await customStatement(
+        'DELETE FROM outfit_items WHERE outfit_id = ?',
+        [id],
+      );
+      await customStatement('DELETE FROM outfits WHERE id = ?', [id]);
+    });
+  }
+
+  /// Puts [itemId] into [slot] of the outfit, enforcing the documented
+  /// invariant in code (docs/backend.md 2.1): a dress is present if and only
+  /// if neither top nor bottom is. Setting a dress clears top and bottom;
+  /// setting a top or bottom clears the dress.
+  Future<void> setOutfitSlot(int outfitId, int itemId, OutfitSlot slot) {
+    return transaction(() async {
+      if (slot == OutfitSlot.dress) {
+        await customStatement(
+          "DELETE FROM outfit_items WHERE outfit_id = ? AND slot IN ('top','bottom')",
+          [outfitId],
+        );
+      } else if (slot == OutfitSlot.top || slot == OutfitSlot.bottom) {
+        await customStatement(
+          'DELETE FROM outfit_items WHERE outfit_id = ? AND slot = ?',
+          [outfitId, OutfitSlot.dress.name],
+        );
+      }
+      await customStatement(
+        'INSERT OR REPLACE INTO outfit_items (outfit_id, item_id, slot) VALUES (?, ?, ?)',
+        [outfitId, itemId, slot.name],
+      );
+    });
+  }
+
+  /// Empties one slot (leaving the outfit without that piece).
+  Future<void> removeOutfitSlot(int outfitId, OutfitSlot slot) {
+    return customStatement(
+      'DELETE FROM outfit_items WHERE outfit_id = ? AND slot = ?',
+      [outfitId, slot.name],
+    );
+  }
+
+  Future<List<OutfitEntry>> getOutfitItems(int outfitId) async {
+    final rows = await customSelect(
+      'SELECT * FROM outfit_items WHERE outfit_id = ?',
+      variables: [Variable(outfitId)],
+    ).get();
+    return rows.map(_entryFromRow).toList();
+  }
+
+  /// Every outfit_items row in the wardrobe. The suggestion UI uses this to
+  /// skip incomplete outfits (userFlow.md edge behaviors).
+  Future<List<OutfitEntry>> getAllOutfitItems() async {
+    final rows = await customSelect('SELECT * FROM outfit_items').get();
+    return rows.map(_entryFromRow).toList();
+  }
+
+  // ---------------------------------------------------------------- mapping
+
+  Item _itemFromRow(QueryRow row) {
+    return Item(
+      id: row.read<int>('id'),
+      name: row.read<String>('name'),
+      category: categoryFromDb(row.read<String>('category')),
+      subtype: row.readNullable<String>('subtype'),
+      brand: row.readNullable<String>('brand'),
+      price: row.readNullable<double>('price'),
+      size: row.readNullable<String>('size'),
+      layerType: layerTypeFromDb(row.readNullable<String>('layer_type')),
+      season: seasonFromDb(row.read<String>('season')),
+      fabric: row.readNullable<String>('fabric'),
+      notes: row.readNullable<String>('notes'),
+      colorPrimaryHex: row.read<String>('color_primary_hex'),
+      colorPrimaryName: row.readNullable<String>('color_primary_name'),
+      colorSecondaryHex: row.readNullable<String>('color_secondary_hex'),
+      colorSecondaryName: row.readNullable<String>('color_secondary_name'),
+      imagePath: row.read<String>('image_path'),
+      cutoutPath: row.read<String>('cutout_path'),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(row.read<int>('created_at')),
+    );
+  }
+
+  Outfit _outfitFromRow(QueryRow row) {
+    return Outfit(
+      id: row.read<int>('id'),
+      name: row.read<String>('name'),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(row.read<int>('created_at')),
+    );
+  }
+
+  OutfitEntry _entryFromRow(QueryRow row) {
+    return OutfitEntry(
+      outfitId: row.read<int>('outfit_id'),
+      itemId: row.read<int>('item_id'),
+      slot: outfitSlotFromDb(row.read<String>('slot')),
+    );
+  }
+}
