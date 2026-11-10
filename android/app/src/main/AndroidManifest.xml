@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet access: only used by the optional, opt-in "identify online"
+         feature (SerpAPI / Cloud Vision). Everything else stays offline. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="my_closet"
         android:name="${applicationName}"

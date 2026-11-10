@@ -17,6 +17,7 @@ import '../models/item.dart';
 import '../models/outfit.dart';
 import '../services/backup_service.dart';
 import '../services/file_storage_service.dart';
+import '../services/identification_pipeline.dart';
 
 /// Inherited access to the single [AppState].
 class AppStateScope extends InheritedNotifier<AppState> {
@@ -48,6 +49,18 @@ class AppState extends ChangeNotifier {
   /// following the system until the user picks a mode; read from the
   /// database in [load].
   ThemeMode themeMode = ThemeMode.system;
+
+  /// app_settings keys for the online identification API keys. The VALUES
+  /// are read from the database only when an identification actually runs;
+  /// the UI only ever sees the set/unset flags below. Keys are never logged
+  /// and never leave app_settings.
+  static const String serpApiKeySetting = 'identification_serpapi_key';
+  static const String visionApiKeySetting = 'identification_vision_key';
+
+  /// Set/unset flags for the Settings screen ("Set"/"Not set" captions).
+  /// Kept as booleans precisely so the stored values never reach the UI.
+  bool serpApiKeySet = false;
+  bool visionApiKeySet = false;
 
   /// True once the first [load] finished (successfully or not).
   bool loaded = false;
@@ -119,6 +132,13 @@ class AppState extends ChangeNotifier {
         };
       } catch (e) {
         debugPrint('AppState.load: theme preference unavailable: $e');
+      }
+      // Key set/unset flags (values are fetched only when a lookup runs).
+      try {
+        serpApiKeySet = _isSet(await _database.getSetting(serpApiKeySetting));
+        visionApiKeySet = _isSet(await _database.getSetting(visionApiKeySetting));
+      } catch (e) {
+        debugPrint('AppState.load: identification keys unavailable: $e');
       }
     } catch (e) {
       loadError = e;
@@ -296,6 +316,71 @@ class AppState extends ChangeNotifier {
       // The choice stays applied for this session even if the write fails.
       debugPrint('AppState.setThemeMode: could not persist: $e');
     }
+  }
+
+  // ------------------------------------------------- online identification
+
+  /// Reads one stored API key straight from app_settings (null when unset
+  /// or blank). Values are never exposed to widgets - only the pipeline and
+  /// its services see them.
+  Future<String?> getSerpApiKey() async =>
+      _keyOrNull(await _database.getSetting(serpApiKeySetting));
+
+  Future<String?> getVisionApiKey() async =>
+      _keyOrNull(await _database.getSetting(visionApiKeySetting));
+
+  static String? _keyOrNull(String? value) =>
+      (value == null || value.trim().isEmpty) ? null : value;
+
+  /// Persists the SerpAPI key (or clears it when [value] trims to empty)
+  /// and refreshes the set/unset flag. The value is never logged.
+  Future<void> setSerpApiKey(String value) =>
+      _setApiKey(serpApiKeySetting, value, (set) => serpApiKeySet = set);
+
+  /// Persists the Cloud Vision key (or clears it when [value] trims to
+  /// empty) and refreshes the set/unset flag. The value is never logged.
+  Future<void> setVisionApiKey(String value) =>
+      _setApiKey(visionApiKeySetting, value, (set) => visionApiKeySet = set);
+
+  Future<void> _setApiKey(
+    String settingKey,
+    String value,
+    void Function(bool set) applyFlag,
+  ) async {
+    final trimmed = value.trim();
+    await _database.setSetting(settingKey, trimmed);
+    applyFlag(trimmed.isNotEmpty);
+    notifyListeners();
+  }
+
+  static bool _isSet(String? value) => value != null && value.trim().isNotEmpty;
+
+  /// Runs the online identification pipeline (the app's only networked
+  /// feature - strictly opt-in, triggered from the details form). Reads the
+  /// keys from app_settings on demand; they never leave this call except
+  /// into the service requests.
+  Future<IdentificationResult> runIdentification({
+    required String imagePath,
+    String? categoryLabel,
+    String? subtype,
+    String? brand,
+  }) async {
+    String? serpKey;
+    String? visionKey;
+    try {
+      serpKey = await getSerpApiKey();
+      visionKey = await getVisionApiKey();
+    } catch (e) {
+      debugPrint('AppState.runIdentification: keys unreadable: $e');
+    }
+    return IdentificationPipeline().identify(
+      imagePath: imagePath,
+      categoryLabel: categoryLabel,
+      subtype: subtype,
+      brand: brand,
+      serpApiKey: serpKey,
+      visionApiKey: visionKey,
+    );
   }
 
   // ----------------------------------------------------------- backup/restore

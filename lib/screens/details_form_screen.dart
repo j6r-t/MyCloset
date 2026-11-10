@@ -2,15 +2,19 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../data/named_colors.dart';
 import '../models/enums.dart';
 import '../models/item.dart';
 import '../services/color_extraction_service.dart';
+import '../services/identification_pipeline.dart';
 import '../ui/app_state.dart';
 import '../ui/theme.dart';
+import 'settings_screen.dart';
 import '../widgets/cutout_image.dart';
 import '../widgets/named_color_picker.dart';
+import '../widgets/shimmer.dart';
 
 /// Screen 4 - Add item, details; also the edit form (userFlow.md flow 4,
 /// step 2, pre-filled). Fields in Fitted's order (design.md section 6.4):
@@ -142,8 +146,22 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
     }
   }
 
+  /// The stored color as a curated [NamedColor] so the wheel pre-marks it;
+  /// identity comes from the closed vocabulary, so match by name.
+  NamedColor? _currentNamed(bool primary) {
+    final name = primary ? _primaryName : _secondaryName;
+    if (name == null) return null;
+    for (final n in kNamedColors) {
+      if (n.name == name) return n;
+    }
+    return null;
+  }
+
   Future<void> _pickColor({required bool primary}) async {
-    final named = await showNamedColorPicker(context);
+    final named = await showNamedColorPicker(
+      context,
+      current: _currentNamed(primary),
+    );
     if (named == null || !mounted) return;
     setState(() {
       if (primary) {
@@ -277,6 +295,73 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
     return t.isEmpty ? null : t;
   }
 
+  // --------------------------------------------------- online identification
+
+  /// True when the "Identify online" pill shows (task spec): always in edit
+  /// mode; in add mode only while both name and brand are still empty.
+  bool get _showIdentifyPill {
+    if (widget.existing != null) return true;
+    return _name.text.trim().isEmpty && _brand.text.trim().isEmpty;
+  }
+
+  /// Runs the opt-in online lookup on the cutout (or the original when
+  /// segmentation fell back) and shows the results sheet.
+  Future<void> _identifyOnline() async {
+    final imagePath = widget.existing?.cutoutPath ??
+        widget.draftCutoutPath ??
+        widget.draftOriginalPath;
+    if (imagePath == null) return;
+    await showIdentificationSheet(
+      context,
+      imagePath: imagePath,
+      brand: _brand.text.trim(),
+      subtype: _subtype.text.trim(),
+      categoryLabel: _category.name,
+      currentValues: {
+        IdentificationTarget.brand: _brand.text.trim(),
+        IdentificationTarget.subtype: _subtype.text.trim(),
+        IdentificationTarget.price: _price.text.trim(),
+      },
+      onApply: _applySuggestion,
+    );
+  }
+
+  /// Fills ONLY the empty field a suggestion targets. The sheet already
+  /// confirms with the user before touching a non-empty field; this is the
+  /// second guard so a user-entered value can never be overwritten.
+  void _applySuggestion(IdentificationTarget target, String value) {
+    if (!mounted) return;
+    bool applied = false;
+    setState(() {
+      switch (target) {
+        case IdentificationTarget.brand:
+          if (_brand.text.trim().isEmpty) {
+            _brand.text = value;
+            applied = true;
+          }
+          break;
+        case IdentificationTarget.subtype:
+          if (_subtype.text.trim().isEmpty) {
+            _subtype.text = value;
+            applied = true;
+          }
+          break;
+        case IdentificationTarget.price:
+          if (_price.text.trim().isEmpty &&
+              double.tryParse(value) != null) {
+            _price.text = value;
+            applied = true;
+          }
+          break;
+      }
+    });
+    if (!applied && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Field already filled - kept your value')),
+      );
+    }
+  }
+
   /// Cancel while creating: discard the draft images (userFlow.md flow 2,
   /// step 5 - no orphans on disk). Runs for both the back button and the
   /// system back gesture via PopScope.
@@ -343,6 +428,29 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                   child: thumbPath == null
                       ? Icon(AppIcons.hanger, size: 28, color: c.hairline)
                       : CutoutImage(path: thumbPath, iconSize: 28),
+                ),
+              ),
+              const SizedBox(height: Spacing.section),
+
+              // Online identification (opt-in, the app's only networked
+              // feature): edit mode always; add mode only while name and
+              // brand are both still empty (task spec). Controllers drive
+              // the visibility, so typing fills it in without a save.
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _name,
+                builder: (context, name, _) =>
+                    ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _brand,
+                  builder: (context, brand, _) {
+                    if (!_showIdentifyPill) return const SizedBox.shrink();
+                    return Center(
+                      child: OutlinedButton.icon(
+                        onPressed: _identifyOnline,
+                        icon: const Icon(Symbols.travel_explore, size: 20),
+                        label: const Text('Identify online'),
+                      ),
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: Spacing.section),
@@ -620,6 +728,459 @@ class FilterPill extends StatelessWidget {
           ).copyWith(fontSize: compact ? 13 : 15),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Online identification sheet (design.md section 6.4 extension). Loading is
+// the design.md section 7 shimmer; errors render as captions; the sheet never
+// overwrites a field the user typed into (inline confirm for non-empty
+// targets, plus the form-side guard in _applySuggestion).
+// ---------------------------------------------------------------------------
+
+Future<void> showIdentificationSheet(
+  BuildContext context, {
+  required String imagePath,
+  required String brand,
+  required String subtype,
+  required String categoryLabel,
+  required Map<IdentificationTarget, String> currentValues,
+  required void Function(IdentificationTarget target, String value) onApply,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (sheetContext) => _IdentificationSheet(
+      imagePath: imagePath,
+      brand: brand,
+      subtype: subtype,
+      categoryLabel: categoryLabel,
+      currentValues: currentValues,
+      onApply: onApply,
+    ),
+  );
+}
+
+class _IdentificationSheet extends StatefulWidget {
+  final String imagePath;
+  final String brand;
+  final String subtype;
+  final String categoryLabel;
+  final Map<IdentificationTarget, String> currentValues;
+  final void Function(IdentificationTarget target, String value) onApply;
+
+  const _IdentificationSheet({
+    required this.imagePath,
+    required this.brand,
+    required this.subtype,
+    required this.categoryLabel,
+    required this.currentValues,
+    required this.onApply,
+  });
+
+  @override
+  State<_IdentificationSheet> createState() => _IdentificationSheetState();
+}
+
+class _IdentificationSheetState extends State<_IdentificationSheet> {
+  Future<IdentificationResult>? _future;
+  bool _serpKeySet = false;
+  bool _visionKeySet = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // One-shot read of the app state without registering a dependency
+    // (initState cannot call dependOnInheritedWidgetOfExactType).
+    final state =
+        context.getInheritedWidgetOfExactType<AppStateScope>()?.notifier;
+    _serpKeySet = state?.serpApiKeySet ?? false;
+    _visionKeySet = state?.visionApiKeySet ?? false;
+    if (_serpKeySet || _visionKeySet) {
+      _future = state!.runIdentification(
+        imagePath: widget.imagePath,
+        categoryLabel: widget.categoryLabel,
+        subtype: widget.subtype.isEmpty ? null : widget.subtype,
+        brand: widget.brand.isEmpty ? null : widget.brand,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(Spacing.gutter),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.75,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('Identify online',
+                        style: AppText.title(context)),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(AppIcons.close, size: 20),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Spacing.s),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: _body(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _body() {
+    // Setup state: no key yet - explain and offer Settings.
+    if (_future == null) {
+      return const _NoKeySetup();
+    }
+    return FutureBuilder<IdentificationResult>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return _loading();
+        }
+        final result = snapshot.data;
+        if (result == null || !result.ok) {
+          return _unavailable(result);
+        }
+        return _results(result);
+      },
+    );
+  }
+
+  /// design.md section 7: shimmer placeholder rows while processing.
+  Widget _loading() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < 4; i++) ...[
+          const ShimmerPlaceholder(height: 52),
+          const SizedBox(height: Spacing.s),
+        ],
+        Text(
+          'Searching the web for this piece...',
+          style: AppText.caption(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _unavailable(IdentificationResult? result) {
+    final lines = (result?.notes.isNotEmpty ?? false)
+        ? result!.notes
+        : const ['No identification available.'];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final line in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Spacing.s),
+            child: Text(line, style: AppText.caption(context)),
+          ),
+      ],
+    );
+  }
+
+  Widget _results(IdentificationResult result) {
+    final children = <Widget>[];
+    if (result.notes.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: Spacing.m),
+          child: Text(result.notes.join(' '), style: AppText.caption(context)),
+        ),
+      );
+    }
+    // Matches: title, price in money green, source host (design.md tokens).
+    if (result.matches.isNotEmpty) {
+      for (final match in result.matches) {
+        children.add(_MatchTile(match: match));
+      }
+      children.add(const SizedBox(height: Spacing.m));
+    }
+    // Suggestions with Apply affordances.
+    final priceApply = result.suggestedPriceValue?.toString() ??
+        _parseablePrice(result.suggestedPriceText);
+    if (result.suggestedBrand != null) {
+      children.add(
+        _SuggestionRow(
+          label: 'Brand',
+          value: result.suggestedBrand!,
+          target: IdentificationTarget.brand,
+          current: widget.currentValues[IdentificationTarget.brand] ?? '',
+          onApply: widget.onApply,
+        ),
+      );
+    }
+    if (result.suggestedType != null) {
+      children.add(
+        _SuggestionRow(
+          label: 'Type',
+          value: result.suggestedType!,
+          target: IdentificationTarget.subtype,
+          current: widget.currentValues[IdentificationTarget.subtype] ?? '',
+          onApply: widget.onApply,
+        ),
+      );
+    }
+    if (priceApply != null) {
+      children.add(
+        _SuggestionRow(
+          label: 'Price',
+          value: priceApply,
+          target: IdentificationTarget.price,
+          current: widget.currentValues[IdentificationTarget.price] ?? '',
+          onApply: widget.onApply,
+        ),
+      );
+    }
+    if (result.matches.isEmpty &&
+        result.suggestedBrand == null &&
+        result.suggestedType == null &&
+        priceApply == null) {
+      children.add(
+        Text('No identification available.', style: AppText.caption(context)),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+
+  String? _parseablePrice(String? text) {
+    if (text == null) return null;
+    final value = double.tryParse(text.replaceAll(',', '.'));
+    return value?.toString();
+  }
+}
+
+/// One match row: hairline bottom border, title, price (money green) and the
+/// source host as a caption.
+class _MatchTile extends StatelessWidget {
+  final IdentifiedMatch match;
+
+  const _MatchTile({required this.match});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.m),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.hairline)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            match.title,
+            style: AppText.value(context),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              if (match.priceText != null) ...[
+                Text(
+                  match.priceText!,
+                  style: AppText.value(context, color: c.money),
+                ),
+                const SizedBox(width: Spacing.m),
+              ],
+              Expanded(
+                child: Text(
+                  '${match.source} - ${match.sourceTag == 'serpapi' ? 'SerpApi' : 'Cloud Vision'}',
+                  style: AppText.caption(context),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One suggestion row with an Apply affordance. Applying fills ONLY an empty
+/// field; when the field already holds a value the tap expands an inline
+/// confirm asking whether to replace the entered value.
+class _SuggestionRow extends StatefulWidget {
+  final String label;
+  final String value;
+  final IdentificationTarget target;
+  final String current;
+  final void Function(IdentificationTarget target, String value) onApply;
+
+  const _SuggestionRow({
+    required this.label,
+    required this.value,
+    required this.target,
+    required this.current,
+    required this.onApply,
+  });
+
+  @override
+  State<_SuggestionRow> createState() => _SuggestionRowState();
+}
+
+class _SuggestionRowState extends State<_SuggestionRow> {
+  bool _confirming = false;
+  bool _applied = false;
+
+  void _apply() {
+    setState(() => _applied = true);
+    widget.onApply(widget.target, widget.value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    final wasEmpty = widget.current.trim().isEmpty;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.m),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.hairline)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.label, style: AppText.fieldLabel(context)),
+                const SizedBox(height: 2),
+                Text(
+                  widget.value,
+                  style: AppText.value(
+                    context,
+                    color: widget.target == IdentificationTarget.price
+                        ? c.money
+                        : null,
+                  ),
+                ),
+                if (_confirming)
+                  Padding(
+                    padding: const EdgeInsets.only(top: Spacing.s),
+                    child: Text(
+                      'Replace "${widget.current}"?',
+                      style: AppText.caption(context),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Spacing.s),
+          if (_applied)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(AppIcons.check, size: 18, color: c.money),
+                const SizedBox(width: 4),
+                Text('Applied', style: AppText.caption(context)),
+              ],
+            )
+          else if (_confirming)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(
+                  onPressed: _apply,
+                  child: const Text('Use it'),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _confirming = false),
+                  child: const Text('Keep mine'),
+                ),
+              ],
+            )
+          else
+            GestureDetector(
+              onTap: () {
+                if (wasEmpty) {
+                  _apply();
+                } else {
+                  setState(() => _confirming = true);
+                }
+              },
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: c.hairline),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  'Apply',
+                  style: AppText.button(context).copyWith(fontSize: 13),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when neither key is set: a short setup explanation with a button
+/// that opens Settings (pushed as a plain route over this flow).
+class _NoKeySetup extends StatelessWidget {
+  const _NoKeySetup();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'To look up this piece online, add an API key in Settings. '
+          'Free tiers work: SerpApi (serpapi.com - API key page) and/or '
+          'Google Cloud Vision (Google Cloud Console - APIs & Services - '
+          'Credentials).',
+          style: AppText.caption(context),
+        ),
+        const SizedBox(height: Spacing.m),
+        Center(
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).push(
+                appRoute(
+                  Scaffold(
+                    // Back affordance only; the screen itself carries the
+                    // "Settings" title.
+                    appBar: AppBar(),
+                    body: const SettingsScreen(),
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(AppIcons.settings, size: 20),
+            label: const Text('Open Settings'),
+          ),
+        ),
+      ],
     );
   }
 }

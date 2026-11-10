@@ -201,6 +201,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onSelect: (mode) => state.setThemeMode(mode),
                 ),
                 const SizedBox(height: Spacing.section),
+                // Online identification keys (the app's only networked
+                // feature). Stored in app_settings; the UI only ever shows
+                // Set/Not set - never the value.
+                Text(
+                  'Online identification',
+                  style: AppText.label(context),
+                ),
+                const SizedBox(height: Spacing.s),
+                Text(
+                  'Optional. Lets the details form look up a garment online '
+                  'when you ask it to. Keys stay on this phone.',
+                  style: AppText.caption(context),
+                ),
+                const SizedBox(height: Spacing.m),
+                _ApiKeyField(
+                  label: 'SerpAPI key',
+                  whereToGet: 'serpapi.com - sign in, then API key page.',
+                  isSet: state.serpApiKeySet,
+                  onSave: (value) => state.setSerpApiKey(value),
+                ),
+                _ApiKeyField(
+                  label: 'Cloud Vision key',
+                  whereToGet:
+                      'Google Cloud Console - APIs & Services - Credentials.',
+                  isSet: state.visionApiKeySet,
+                  onSave: (value) => state.setVisionApiKey(value),
+                ),
+                const SizedBox(height: Spacing.s),
+                Text(
+                  'Free tiers: SerpApi 100 searches/month, Cloud Vision '
+                  '1,000 calls/month. Each lookup uses at most one per key.',
+                  style: AppText.caption(context),
+                ),
+                const SizedBox(height: Spacing.section),
                 _SettingsRow(
                   icon: AppIcons.info,
                   title: 'About',
@@ -400,6 +434,129 @@ class _SettingsRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// One API key row (Settings > Online identification): obscured, paste-friendly
+/// input saved on submit. The stored value is never shown - only a "Set" /
+/// "Not set" caption - and the field always starts empty, so even a shared
+/// screen or screenshot never reveals the key.
+class _ApiKeyField extends StatefulWidget {
+  final String label;
+  final String whereToGet;
+  final bool isSet;
+  final Future<void> Function(String value) onSave;
+
+  const _ApiKeyField({
+    required this.label,
+    required this.whereToGet,
+    required this.isSet,
+    required this.onSave,
+  });
+
+  @override
+  State<_ApiKeyField> createState() => _ApiKeyFieldState();
+}
+
+class _ApiKeyFieldState extends State<_ApiKeyField> {
+  final _controller = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(_controller.text);
+      // Clear the entry field after saving; the stored value is never shown.
+      _controller.clear();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save the key: $e')),
+        );
+      }
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.m),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.hairline)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.label, style: AppText.label(context)),
+          const SizedBox(height: 2),
+          Text(widget.whereToGet, style: AppText.caption(context)),
+          const SizedBox(height: Spacing.s),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  // Paste works normally; the field just hides what is in it.
+                  onSubmitted: (_) => _save(),
+                  style: AppText.value(context),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: widget.isSet ? 'Key saved' : 'Paste key',
+                    hintStyle: AppText.caption(context),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: c.hairline),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: c.ink),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: Spacing.s),
+              GestureDetector(
+                onTap: _save,
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    _saving ? AppIcons.check : Symbols.save,
+                    size: 22,
+                    color: c.inkSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Spacing.s),
+          Text(
+            widget.isSet ? 'Set' : 'Not set',
+            style: AppText.caption(
+              context,
+              color: widget.isSet ? c.money : c.inkSecondary,
+            ),
+          ),
+        ],
       ),
     );
   }
