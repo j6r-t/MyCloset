@@ -28,7 +28,7 @@ Settings (gear, app bar)
    - Looks clean → Continue.
    - Leftover background pixels → toggle Eraser, drag over them, Continue.
    - Unusable → Retake (back to step 1; nothing saved yet).
-4. **Details screen**: name (only required field); category of 6 (top, bottom, dress, shoes, outerwear, accessory — choosing dress auto-marks it as a one-piece for outfit logic); auto-extracted primary/secondary color swatches shown, tap to correct from a named-color list; optional: subtype, brand, price (TND), season (summer/winter/all), fabric, notes.
+4. **Details screen**: name (only required field); category of 6 (top, bottom, dress, shoes, outerwear, accessory — choosing dress auto-marks it as a one-piece for outfit logic); auto-extracted primary/secondary color swatches shown, tap to correct from the radial color wheel; optional: subtype, brand, price (TND), season (summer/winter/all), fabric, notes. **Auto-fill (added 2026-11-10):** if identification keys are set (Settings), the form silently runs the online pipeline on open and fills empty name/brand/price/subtype with suggested values, each marked with a fading "auto" chip; typed values are never overwritten; failure shows one quiet caption + a single retry icon.
 5. Save → back to Wardrobe, new tile briefly highlighted (accent border fade, 1s). Cancel at any point discards the draft images (deleted from disk, no orphans).
 
 ## Flow 3 — Browse & find

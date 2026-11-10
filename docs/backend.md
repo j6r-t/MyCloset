@@ -125,6 +125,15 @@ Each rule hit generates the one-liner shown on the card ("Navy + mustard — com
 ### 5.5 Live harmony readout (outfit builder)
 Same scorer, bucketed: score ≥ 18 → "Harmonious", 12–17 → "Mixed", < 12 → "Clashing".
 
+## 5b. Online identification (Tier 2, added 2026-11-10) — the ONLY networked feature
+
+Opt-in, silent auto-fill (Fitted-style): adding a new item auto-runs identification in the background; suggested brand/type/price fill **only empty fields** (brief "auto" chip on each filled row). Edit mode never auto-runs. No manual button.
+
+- **Pipeline cascade** (`identification_pipeline.dart`): SerpAPI Lens (Image API upload → image_id → google_lens — lens is URL/image_id-only per live docs, hence two-step) → shopping text-mode salvage from on-device hints → Cloud Vision WEB_DETECTION (inline base64 cutout, 512px JPEG) → graceful unavailable with per-step reasons. 15s timeouts, URL dedupe, never throws.
+- **Keys**: SerpAPI + Cloud Vision keys stored by the user in Settings → app_settings table (schema v3); masked UI, "Set"/"Not set" only; never hardcoded, logged, or committed.
+- **Offline guarantee**: INTERNET permission serves this feature alone; no HTTP call may start except from the auto-fill on the add-item form.
+- **Quota reality**: SerpAPI Lens ≈2 credits/item (~50 items/mo free) then falls to Vision (1,000/mo free).
+
 ## 6. Backup / restore
 
 - Export: `archive` → zip { `closet.db`, `images/**` } → `share_plus` (Drive/PC).
