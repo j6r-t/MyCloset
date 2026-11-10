@@ -53,6 +53,10 @@ Settings (gear, app bar)
 5. Live harmony readout updates with each slot ("Harmonious", "Mixed", "Clashing") — computed per `backend.md` §5.
 6. Name (optional — defaults to "Outfit · Nov 9") → Save → gallery.
 
+## Flow 5b — Outfit detail (added 2026-11-10)
+
+Tap any outfit in the gallery → detail screen: full vertical flat-lay column (dashed placeholder if the core is missing), name (tap to rename inline), date + live harmony readout, then a **Pieces list** — one hairline row per garment (thumbnail, name, slot/size/layer-type, brand, price in money-green, color swatch). Tap a row → item detail; pencil → edit form; per-row delete → confirm → removes that slot from the outfit (outfit keeps its other pieces). Outfit-level actions: "Edit in builder" (black pill) and Delete (outlined, confirmed).
+
 ## Flow 6 — Get suggestions
 
 1. Wardrobe → Suggest (shuffle icon in section header).

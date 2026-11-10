@@ -8,18 +8,23 @@
 
 ---
 
-## 1. Color (light theme only — dark mode dropped with v1)
+## 1. Color (light theme primary; dark theme added 2026-11-10)
 
 | Token | Value | Use |
 |---|---|---|
 | `bg` | `#FFFFFF` | App background |
-| `tile` | `#F5F5F6` | Item-detail hero card; grid tiles only as a whisper (`#F9F9FA`) |
+| `surface` | `#FFFFFF` | Cards, sheets |
+| `tile` | `#F5F5F6` | Item-detail hero card; eraser canvas backdrop; grid tiles only as a whisper (`#F9F9FA`) |
 | `ink` | `#0B0B0C` | Primary text, black pill fills |
 | `ink-secondary` | `#8A8A8E` | Labels, inactive nav, captions |
 | `hairline` | `#ECECED` | 1px dividers, outlined-pill borders |
 | `money` | `#1E9E4B` | Price/value figures only |
 | `danger` | `#C4362C` | Destructive actions |
 | `category` | Pants `#F06292` · Tops `#64A8F0` · Shoes `#F2C94C` · Dress `#9B7BD1` · Outerwear `#4DB6AC` · Accessory `#F2994A` | Dashboard category bars only — never UI chrome |
+
+### Dark theme (Settings: System / Light / Dark; persisted via app_settings table, schema v3)
+
+Warm near-black surfaces (`bg #131211`, `surface #1F1D1B`), warm-white ink (`#F4F2EF`), darkened hairlines, lifted `money #4CC97A` / `danger #E57368`, category colors one step lighter. **Primary pairing inverts on dark: white pill fill, ink content.** All screens must use `AppColors.of(context)` — no hardcoded light colors.
 
 Rules: black pills (`ink` fill, white text) are the primary action style; outlined pills (hairline border, ink text) are secondary; no other fills. Never tint anything behind a garment cutout except `tile`.
 
