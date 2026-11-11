@@ -351,6 +351,17 @@ class AppState extends ChangeNotifier {
     void Function(bool set) applyFlag,
   ) async {
     final trimmed = value.trim();
+    // A database that reached this build through an odd update path can
+    // carry a stamped schema version >= 3 without the app_settings table:
+    // the versioned migration only appends the table when version < 3, and
+    // its absence is invisible at startup because load() catches every
+    // settings-table read (and setThemeMode swallows its write failure).
+    // Saving a key is the ONE app_settings write whose failure reaches the
+    // user - the reported "error when setting the API keys" snackbar.
+    // Recreate the table (same DDL as schema v3) before writing; IF NOT
+    // EXISTS makes this a no-op on healthy databases, and it also repairs
+    // theme persistence on the same database.
+    await _database.customStatement(AppDatabase.appSettingsDdl);
     await _database.setSetting(settingKey, trimmed);
     applyFlag(trimmed.isNotEmpty);
     notifyListeners();

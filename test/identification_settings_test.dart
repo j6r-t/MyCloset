@@ -4,6 +4,11 @@
 // restores the flags. runIdentification without keys returns the graceful
 // unavailable result without any HTTP.
 //
+// The key save also heals a database that is missing the app_settings table
+// (an odd-update device state whose only visible symptom was an error
+// snackbar on the first key save); the settings screen itself is covered by
+// widget tests driving the real save flow against an in-memory database.
+//
 // The second group covers the details form as a pure receiver: the
 // identification screen owns running the lookup now, so the form only
 // applies a passed-in prefill to EMPTY fields (brief "auto" chips), shows
@@ -17,11 +22,13 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import 'package:my_closet/database/app_database.dart';
 import 'package:my_closet/models/enums.dart';
 import 'package:my_closet/models/item.dart';
 import 'package:my_closet/screens/details_form_screen.dart';
+import 'package:my_closet/screens/settings_screen.dart';
 import 'package:my_closet/services/file_storage_service.dart';
 import 'package:my_closet/services/identification_pipeline.dart';
 import 'package:my_closet/ui/app_state.dart';
@@ -96,6 +103,35 @@ void main() {
     });
 
     test(
+        'saving a key on a database missing app_settings heals the table '
+        'instead of erroring (regression: the save used to throw "no such '
+        'table")', () async {
+      // The odd-update device state: the settings table is gone while the
+      // schema version is stamped past the migration that would create it.
+      // load() swallows the missing-table reads, so nothing hinted at this
+      // until the first key save surfaced the raw SqliteException.
+      await db.customStatement('DROP TABLE app_settings');
+      await db.customStatement('PRAGMA user_version = 4');
+
+      await state.setSerpApiKey(_testKey);
+      expect(state.serpApiKeySet, isTrue);
+      expect(await state.getSerpApiKey(), _testKey);
+
+      // The heal also repairs the other settings-table writer (theme) and
+      // survives a fresh load like the next app start.
+      await state.setThemeMode(ThemeMode.dark);
+      expect(await db.getSetting('theme_mode'), 'dark');
+
+      final fresh = AppState(
+        database: db,
+        storage: FileStorageService(documentsDir: () async => temp),
+      );
+      await fresh.load();
+      expect(fresh.serpApiKeySet, isTrue);
+      expect(await fresh.getSerpApiKey(), _testKey);
+    });
+
+    test(
         'runIdentification without keys returns the unavailable result with '
         'no throw', () async {
       final result = await state.runIdentification(
@@ -104,6 +140,83 @@ void main() {
       expect(result.ok, isFalse);
       expect(result.matches, isEmpty);
       expect(result.notes.single, contains('No API keys set'));
+    });
+  });
+
+  group('settings screen key entry', () {
+    Future<void> pumpSettings(WidgetTester tester, AppState screenState) async {
+      // Tall surface: the key fields sit below the backup/theme rows and a
+      // ListView only materializes visible children.
+      tester.view.physicalSize = const Size(1080, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(),
+          home: Scaffold(
+            body: AppStateScope(
+              state: screenState,
+              child: const SettingsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets(
+        'typing a key and saving stores it, flips the caption to Set and '
+        'shows no error snackbar', (tester) async {
+      await pumpSettings(tester, state);
+
+      // Row order in the settings list: the first TextField is the SerpAPI
+      // row, the second is the Cloud Vision row.
+      await tester.enterText(find.byType(TextField).first, _testKey);
+      await tester.tap(find.byIcon(Symbols.save).first);
+      // Flush the async save (in-memory drift completes in microtasks).
+      await tester.pump();
+      await tester.pump();
+
+      expect(state.serpApiKeySet, isTrue);
+      expect(await state.getSerpApiKey(), _testKey);
+      // The entry field is cleared again and the caption flips; the Vision
+      // row stays "Not set".
+      expect(find.text('Key saved'), findsOneWidget);
+      expect(find.text('Set'), findsOneWidget);
+      expect(find.text('Not set'), findsOneWidget);
+      expect(find.textContaining('Could not save'), findsNothing);
+    });
+
+    testWidgets('saving the Vision key from its own row updates only that '
+        'row', (tester) async {
+      await pumpSettings(tester, state);
+
+      await tester.enterText(find.byType(TextField).at(1), _testKey);
+      await tester.tap(find.byIcon(Symbols.save).at(1));
+      await tester.pump();
+      await tester.pump();
+
+      expect(state.visionApiKeySet, isTrue);
+      expect(await state.getVisionApiKey(), _testKey);
+      expect(state.serpApiKeySet, isFalse);
+      expect(find.textContaining('Could not save'), findsNothing);
+    });
+
+    testWidgets('saving an empty field clears the caption without an error',
+        (tester) async {
+      await state.setSerpApiKey(_testKey);
+      await pumpSettings(tester, state);
+
+      // Submit the still-empty field: the key clears and no error shows.
+      await tester.enterText(find.byType(TextField).first, '');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.pump();
+
+      expect(state.serpApiKeySet, isFalse);
+      expect(await state.getSerpApiKey(), isNull);
+      expect(find.textContaining('Could not save'), findsNothing);
     });
   });
 
