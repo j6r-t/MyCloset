@@ -80,9 +80,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
     String? cutoutPath;
     try {
       final storage = AppStateScope.of(context).storage;
-      originalPath = await storage.saveDraft(bytes, 'draft_original.jpg');
+      // Unique per-capture names: Flutter's image cache is keyed by file
+      // path, so reusing 'draft_cutout.png' across captures made the next
+      // item's details form show the PREVIOUS item's image until the save
+      // moved the file to its final per-item path.
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      originalPath = await storage.saveDraft(bytes, 'draft_original_$stamp.jpg');
       if (cutoutPng != null) {
-        cutoutPath = await storage.saveDraft(cutoutPng, 'draft_cutout.png');
+        cutoutPath = await storage.saveDraft(cutoutPng, 'draft_cutout_$stamp.png');
       }
     } catch (e) {
       if (mounted) {

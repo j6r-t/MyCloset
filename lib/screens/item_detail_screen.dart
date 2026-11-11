@@ -490,26 +490,33 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
   /// Color bubbles next to the Color row's value: the actual saved hex at
   /// 22px - large enough to read the color at a glance (the old 12px dots
   /// were effectively invisible). Primary first, accent (if any) beside it.
+  /// The outline is ink-secondary, not the hairline token: light colors
+  /// (white, ivory, silver) sit on the white page and a hairline outline
+  /// made those bubbles disappear entirely.
   Widget _swatches(Item item, AppColors c) {
+    Widget bubble(String hex, {String? keySuffix}) {
+      return Container(
+        key: keySuffix == null ? null : ValueKey('swatch-$keySuffix'),
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          // 0xFF prefix: '#RRGGBB' parsed bare yields 0x00RRGGBB - alpha 0,
+          // a fully transparent bubble (the "empty bubbles" bug).
+          color: Color(0xFF000000 | int.parse(hex.substring(1), radix: 16)),
+          border: Border.all(color: c.inkSecondary, width: 1),
+        ),
+      );
+    }
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final hex in [
-          item.colorPrimaryHex,
-          if (item.colorSecondaryHex != null) item.colorSecondaryHex!,
-        ])
-          Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Color(int.parse(hex.substring(1), radix: 16)),
-                border: Border.all(color: c.hairline, width: 1),
-              ),
-            ),
-          ),
+        bubble(item.colorPrimaryHex, keySuffix: 'primary'),
+        if (item.colorSecondaryHex != null) ...[
+          const SizedBox(width: 6),
+          bubble(item.colorSecondaryHex!, keySuffix: 'secondary'),
+        ],
       ],
     );
   }

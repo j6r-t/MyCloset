@@ -247,5 +247,39 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(find.text('auto'), findsNothing);
     });
+
+    testWidgets(
+      'suggestedCategory moves Garment Type off its top default '
+      '(identified shoe must not save as a top)',
+      // TODO(test-flake): same real-IO-in-testWidgets hang as the other
+      // tests in this file - see the TODO at the top of this group.
+      skip: true,
+      (tester) async {
+        final state = stubState();
+        final draft = await makeDraft('original.jpg');
+
+        await pumpForm(
+          tester,
+          state,
+          DetailsFormScreen(
+            draftOriginalPath: draft.path,
+            prefill: const IdentificationResult(
+              ok: true,
+              matches: [],
+              suggestedSubtype: 'sneakers',
+              suggestedCategory: Category.shoes,
+              notes: [],
+            ),
+          ),
+        );
+
+        // The Garment Type row now shows shoes, not the form's `top`
+        // default - the shoe-as-top bug.
+        expect(find.text('shoes'), findsOneWidget);
+        expect(find.text('top'), findsNothing);
+        // Two auto chips: subtype (Type row) and the Garment Type row.
+        expect(find.text('auto'), findsNWidgets(2));
+      },
+    );
   });
 }

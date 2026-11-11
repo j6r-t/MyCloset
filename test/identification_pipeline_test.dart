@@ -624,5 +624,56 @@ void main() {
       expect(decoded.width, lessThanOrEqualTo(512));
       expect(decoded.height, lessThanOrEqualTo(512));
     });
+
+    test('prepareIdentificationJpeg flattens transparency onto white', () {
+      // A cutout-shaped RGBA image: opaque red garment center, fully
+      // transparent (black-rgb) corners. JPEG cannot carry alpha, so the
+      // corners must come out WHITE after the round-trip - not black (the
+      // plain alpha drop), which made Lens see a black rectangle.
+      final image = img.Image(width: 40, height: 40, numChannels: 4);
+      img.fill(image, color: img.ColorRgba8(0, 0, 0, 0));
+      for (var y = 10; y < 30; y++) {
+        for (var x = 10; x < 30; x++) {
+          image.setPixelRgba(x, y, 255, 0, 0, 255);
+        }
+      }
+      final prepared = IdentificationPipeline.prepareIdentificationJpeg(
+        Uint8List.fromList(img.encodePng(image)),
+      );
+      final decoded = img.decodeImage(Uint8List.fromList(prepared))!;
+      final corner = decoded.getPixel(2, 2);
+      expect(corner.r, greaterThan(230), reason: 'corner must be near white');
+      expect(corner.g, greaterThan(230), reason: 'corner must be near white');
+      expect(corner.b, greaterThan(230), reason: 'corner must be near white');
+      final center = decoded.getPixel(20, 20);
+      expect(center.r, greaterThan(200), reason: 'garment pixel stays red');
+    });
+  });
+
+  group('category mapping', () {
+    test('categoryFromSubtype covers the six categories', () {
+      final cases = <String, Category>{
+        'hoodie': Category.top,
+        't-shirt': Category.top,
+        'jeans': Category.bottom,
+        'joggers': Category.bottom,
+        'dress': Category.dress,
+        'jumpsuit': Category.dress,
+        'sneakers': Category.shoes,
+        'boots': Category.shoes,
+        'slides': Category.shoes,
+        'jacket': Category.outerwear,
+        'puffer jacket': Category.outerwear,
+        'belt': Category.accessory,
+        'backpack': Category.accessory,
+      };
+      cases.forEach((subtype, expected) {
+        expect(IdentificationPipeline.categoryFromSubtype(subtype), expected,
+            reason: 'subtype: $subtype');
+      });
+      expect(IdentificationPipeline.categoryFromSubtype('unknown thing'),
+          isNull);
+      expect(IdentificationPipeline.categoryFromSubtype(null), isNull);
+    });
   });
 }

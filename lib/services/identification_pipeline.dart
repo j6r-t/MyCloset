@@ -65,6 +65,12 @@ class IdentificationResult {
   /// default).
   final LayerType? suggestedLayerType;
 
+  /// Garment type (category) derived from [suggestedSubtype] via the fixed
+  /// subtype->category table; null when the subtype is unknown or carries
+  /// no mapping. Lets the form's Garment Type row follow the identification
+  /// instead of silently staying on its `top` default.
+  final Category? suggestedCategory;
+
   /// Size token found in the best title ('M', '42'...), null when absent.
   final String? suggestedSize;
 
@@ -91,6 +97,7 @@ class IdentificationResult {
     this.suggestedBrand,
     this.suggestedSubtype,
     this.suggestedLayerType,
+    this.suggestedCategory,
     this.suggestedSize,
     this.suggestedPriceText,
     this.suggestedPriceValue,
@@ -245,6 +252,7 @@ class IdentificationPipeline {
       suggestedBrand: brandSuggestion,
       suggestedSubtype: suggestedSubtype,
       suggestedLayerType: suggestedLayerType,
+      suggestedCategory: categoryFromSubtype(suggestedSubtype),
       suggestedSize: suggestedSize,
       suggestedPriceText: shoppingTop?.priceText,
       suggestedPriceValue: shoppingTop?.priceValue,
@@ -445,6 +453,83 @@ class IdentificationPipeline {
   static LayerType? layerTypeFromSubtype(String? subtype) =>
       subtype == null ? null : _subtypeLayerTypes[subtype];
 
+  /// Subtype -> the six fixed categories. Drives the Garment Type
+  /// prefill: without it the form silently kept its `top` default, so an
+  /// identified pair of shoes landed in the closet as a top.
+  static const Map<String, Category> _subtypeCategories = {
+    // tops
+    't-shirt': Category.top,
+    'shirt': Category.top,
+    'polo': Category.top,
+    'blouse': Category.top,
+    'tank top': Category.top,
+    'turtleneck': Category.top,
+    'hoodie': Category.top,
+    'sweatshirt': Category.top,
+    'sweater': Category.top,
+    'cardigan': Category.top,
+    'overshirt': Category.top,
+    // bottoms
+    'jeans': Category.bottom,
+    'trousers': Category.bottom,
+    'dress pants': Category.bottom,
+    'chinos': Category.bottom,
+    'cargo pants': Category.bottom,
+    'cargo trousers': Category.bottom,
+    'cargo shorts': Category.bottom,
+    'shorts': Category.bottom,
+    'joggers': Category.bottom,
+    'track pants': Category.bottom,
+    'leggings': Category.bottom,
+    'overalls': Category.bottom,
+    // dresses
+    'dress': Category.dress,
+    'jumpsuit': Category.dress,
+    'romper': Category.dress,
+    // shoes
+    'sneakers': Category.shoes,
+    'loafers': Category.shoes,
+    'oxfords': Category.shoes,
+    'boots': Category.shoes,
+    'sandals': Category.shoes,
+    'slides': Category.shoes,
+    'heels': Category.shoes,
+    'flats': Category.shoes,
+    // outerwear
+    'jacket': Category.outerwear,
+    'coat': Category.outerwear,
+    'blazer': Category.outerwear,
+    'parka': Category.outerwear,
+    'puffer jacket': Category.outerwear,
+    'bomber jacket': Category.outerwear,
+    'windbreaker': Category.outerwear,
+    'vest': Category.outerwear,
+    'suit': Category.outerwear,
+    // accessories
+    'cap': Category.accessory,
+    'beanie': Category.accessory,
+    'hat': Category.accessory,
+    'sunglasses': Category.accessory,
+    'glasses': Category.accessory,
+    'watch': Category.accessory,
+    'bracelet': Category.accessory,
+    'necklace': Category.accessory,
+    'ring': Category.accessory,
+    'earrings': Category.accessory,
+    'gloves': Category.accessory,
+    'tie': Category.accessory,
+    'wallet': Category.accessory,
+    'belt': Category.accessory,
+    'scarf': Category.accessory,
+    'backpack': Category.accessory,
+    'tote bag': Category.accessory,
+    'bag': Category.accessory,
+  };
+
+  /// Category for [subtype], null when the subtype is null or unknown.
+  static Category? categoryFromSubtype(String? subtype) =>
+      subtype == null ? null : _subtypeCategories[subtype];
+
   /// Size token in [title]: a standalone letter size (XS|S|M|L|XL|XXL), or
   /// a "size 42"-style European number (30-59). Null when absent.
   static String? sizeFromTitle(String? title) {
@@ -532,6 +617,12 @@ class IdentificationPipeline {
   /// downscaled to ~512px (Cloud Vision's sweet spot; also under SerpApi's
   /// 500 KB upload cap for any plausible 512px JPEG). Returns the original
   /// bytes unchanged when decoding fails - the APIs accept most inputs.
+  ///
+  /// Any transparency is flattened onto WHITE first: JPEG has no alpha
+  /// channel and the plain alpha drop leaves transparent pixels black, so
+  /// a cutout upload could reach Google Lens as a black rectangle with the
+  /// garment in the middle - Lens then often finds nothing, which showed up
+  /// as fast "couldn't identify" failures on cutouts that were fine.
   static List<int> prepareIdentificationJpeg(List<int> bytes) {
     try {
       final decoded = img.decodeImage(Uint8List.fromList(bytes));
@@ -546,6 +637,16 @@ class IdentificationPipeline {
           width: (decoded.width * scale).round(),
           height: (decoded.height * scale).round(),
         );
+      }
+      if (small.numChannels == 4) {
+        final flat = img.Image(
+          width: small.width,
+          height: small.height,
+          numChannels: 3,
+        );
+        img.fill(flat, color: img.ColorRgb8(255, 255, 255));
+        img.compositeImage(flat, small);
+        small = flat;
       }
       return img.encodeJpg(small, quality: 85);
     } catch (_) {

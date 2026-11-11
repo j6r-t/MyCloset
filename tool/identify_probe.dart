@@ -34,10 +34,10 @@ import 'dart:io';
 
 import 'package:image/image.dart' as img;
 
-import '../lib/data/named_colors.dart';
-import '../lib/services/color_extraction_service.dart';
-import '../lib/services/identification_pipeline.dart';
-import '../lib/services/serpapi_service.dart';
+import 'package:my_closet/data/named_colors.dart';
+import 'package:my_closet/services/color_extraction_service.dart';
+import 'package:my_closet/services/identification_pipeline.dart';
+import 'package:my_closet/services/serpapi_service.dart';
 
 const _usage =
     'Usage: dart run tool/identify_probe.dart <image> '

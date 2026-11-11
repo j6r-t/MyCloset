@@ -50,7 +50,7 @@ class DetailsFormScreen extends StatefulWidget {
 }
 
 /// The rows the identification run can touch.
-enum _AutoField { name, brand, price, subtype, size, layerType }
+enum _AutoField { name, brand, price, subtype, size, layerType, category }
 
 /// Display label for a [Condition] (Fitted's wording); the enum's camelCase
 /// names are identifiers, not UI copy, and the database stores the
@@ -365,6 +365,19 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
   /// search contributed.
   void _applyPrefill(IdentificationResult result) {
     final applied = <_AutoField>{};
+    // Garment Type FIRST: the layer-type step below reads _canLayer, which
+    // depends on _category. There is no "empty" state to check - in add
+    // mode the category is still the untouched `top` default at this point
+    // (prefill runs in initState, before any user input), so the
+    // identification is authoritative for it here.
+    final category = result.suggestedCategory;
+    if (category != null) {
+      _category = category;
+      applied.add(_AutoField.category);
+      // layer_type is null outside top/outerwear (backend.md section 2.1);
+      // a category that cannot layer also drops a carried-over layerType.
+      if (!_canLayer) _layerType = null;
+    }
     final name = result.suggestedName;
     if (name != null && _name.text.trim().isEmpty) {
       _name.text = name;
@@ -560,6 +573,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
               ),
               _Row(
                 label: 'Garment Type',
+                suffix: _rowSuffix(_AutoField.category),
                 child: Row(
                   children: [
                     Expanded(
@@ -746,14 +760,19 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
     );
   }
 
+  /// The current color at a glance. Outlined in ink-secondary, not the
+  /// hairline token - light colors vanish against the white page otherwise
+  /// (same fix as the item detail screen's bubbles).
   Widget _swatchDot(String hex, AppColors c) {
     return Container(
       width: 18,
       height: 18,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: Color(int.parse(hex.substring(1), radix: 16)),
-        border: Border.all(color: c.hairline),
+        // 0xFF prefix: '#RRGGBB' parsed bare yields 0x00RRGGBB - alpha 0,
+        // a fully transparent dot (the "empty bubbles" bug).
+        color: Color(0xFF000000 | int.parse(hex.substring(1), radix: 16)),
+        border: Border.all(color: c.inkSecondary, width: 1),
       ),
     );
   }
