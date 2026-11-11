@@ -12,9 +12,11 @@ import 'outfit_builder_screen.dart';
 
 /// Screen 5 - Item detail (design.md section 6.5): hero cutout on a tile
 /// card, action pills row - "Create fit" (black, pre-seeds the outfit
-/// builder) / Edit / Delete (outlined) - then hairline metadata rows
-/// including Size and Layer Type, each with a per-row pencil edit; delete
-/// confirms via sheet.
+/// builder) / Edit / Delete (outlined) - then the metadata table in
+/// Fitted's exact rows and order (Value, Brand, Type, Size, Garment Type,
+/// Layer Type pills, Color with swatch bubbles, Condition). Season, Fabric
+/// and Notes stay in the edit form and the database, not this page.
+/// Delete confirms via sheet.
 class ItemDetailScreen extends StatefulWidget {
   final Item item;
 
@@ -117,14 +119,18 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
     await onSave(value);
   }
 
-  /// Pill-selector edit sheet for fixed enums (category, season, layer).
+  /// Pill-selector edit sheet for fixed enums (category, condition, layer).
+  /// [label] overrides the pill text (e.g. conditionLabel's Fitted wording);
+  /// the default is the enum name.
   Future<void> _editEnum<T extends Enum>({
     required String title,
     required List<T> values,
     required T? selected,
     bool allowNone = false,
+    String Function(T value)? label,
     required Future<void> Function(T? value) onSave,
   }) async {
+    String pillLabel(T value) => label == null ? value.name : label(value);
     final picked = await showModalBottomSheet<T?>(
       context: context,
       builder: (sheetContext) {
@@ -153,7 +159,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
                   children: [
                     for (final value in values)
                       _SheetPill(
-                        label: value.name,
+                        label: pillLabel(value),
                         active: value == selected,
                         onTap: () => Navigator.of(sheetContext).pop(value),
                       ),
@@ -320,7 +326,10 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
           ),
           const SizedBox(height: Spacing.m),
 
-          // Hairline metadata rows, per-row pencil edits (design.md 6.5).
+          // Metadata table, Fitted's exact rows and order (design.md 6.5):
+          // Value, Brand, Type, Size, Garment Type, Layer Type, Color,
+          // Condition. Season/Fabric/Notes live in the edit form and the
+          // database only.
           MetadataRow(
             label: 'Value',
             editable: true,
@@ -370,8 +379,23 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
             value: Text(item.subtype ?? '—', style: AppText.value(context)),
           ),
           MetadataRow(
+            label: 'Size',
+            editable: true,
+            onEdit: () => _editText(
+              context,
+              item,
+              title: 'Size',
+              initial: item.size,
+              onSave: (value) =>
+                  _updateItem(item.copyWith(size: _nullIfEmpty(value))),
+            ),
+            value: Text(item.size ?? '—', style: AppText.value(context)),
+          ),
+          // Dropdown-style row like Fitted's (chevron, not pencil).
+          MetadataRow(
             label: 'Garment Type',
             editable: true,
+            trailingIcon: AppIcons.expandMore,
             onEdit: () => _editEnum(
               title: 'Garment type',
               values: Category.values,
@@ -389,33 +413,29 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
             ),
             value: Text(item.category.name, style: AppText.value(context)),
           ),
-          MetadataRow(
-            label: 'Size',
-            editable: true,
-            onEdit: () => _editText(
-              context,
-              item,
-              title: 'Size',
-              initial: item.size,
-              onSave: (value) =>
-                  _updateItem(item.copyWith(size: _nullIfEmpty(value))),
-            ),
-            value: Text(item.size ?? '—', style: AppText.value(context)),
-          ),
+          // Inline pill selector like Fitted's hoodie page (tap to switch,
+          // tap the active pill to clear).
           if (_canLayer)
             MetadataRow(
               label: 'Layer Type',
-              editable: true,
-              onEdit: () => _editEnum(
-                title: 'Layer type',
-                values: LayerType.values,
-                selected: item.layerType,
-                allowNone: true,
-                onSave: (value) => _updateItem(item.copyWith(layerType: value)),
-              ),
-              value: Text(
-                item.layerType?.name ?? '—',
-                style: AppText.value(context),
+              value: Row(
+                children: [
+                  for (final layer in LayerType.values)
+                    Padding(
+                      padding: const EdgeInsets.only(right: Spacing.s),
+                      child: FilterPill(
+                        key: ValueKey('layer-${layer.name}'),
+                        label: layer.name,
+                        active: item.layerType == layer,
+                        compact: true,
+                        onTap: () => _updateItem(
+                          item.copyWith(
+                            layerType: item.layerType == layer ? null : layer,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           MetadataRow(
@@ -425,55 +445,26 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
             leading: _swatches(item, c),
             value: Text(_colorsLine(item), style: AppText.value(context)),
           ),
-          // Condition only when graded (it stays optional in the form).
+          // Condition when graded (Fitted shows it with a pencil; the edit
+          // sheet can also clear it - the field stays optional).
           if (item.condition != null)
             MetadataRow(
               key: const ValueKey('row-condition'),
               label: 'Condition',
+              editable: true,
+              onEdit: () => _editEnum(
+                title: 'Condition',
+                values: Condition.values,
+                selected: item.condition,
+                allowNone: true,
+                label: conditionLabel,
+                onSave: (value) =>
+                    _updateItem(item.copyWith(condition: value)),
+              ),
               value: Text(
                 conditionLabel(item.condition!),
                 style: AppText.value(context),
               ),
-            ),
-          MetadataRow(
-            label: 'Season',
-            editable: true,
-            onEdit: () => _editEnum(
-              title: 'Season',
-              values: Season.values,
-              selected: item.season,
-              onSave: (value) => _updateItem(item.copyWith(season: value!)),
-            ),
-            value: Text(item.season.name, style: AppText.value(context)),
-          ),
-          if (item.fabric != null)
-            MetadataRow(
-              label: 'Fabric',
-              editable: true,
-              onEdit: () => _editText(
-                context,
-                item,
-                title: 'Fabric',
-                initial: item.fabric,
-                onSave: (value) =>
-                    _updateItem(item.copyWith(fabric: _nullIfEmpty(value))),
-              ),
-              value: Text(item.fabric!, style: AppText.value(context)),
-            ),
-          if (item.notes != null && item.notes!.isNotEmpty)
-            MetadataRow(
-              label: 'Notes',
-              editable: true,
-              onEdit: () => _editText(
-                context,
-                item,
-                title: 'Notes',
-                initial: item.notes,
-                multiline: true,
-                onSave: (value) =>
-                    _updateItem(item.copyWith(notes: _nullIfEmpty(value))),
-              ),
-              value: Text(item.notes!, style: AppText.value(context)),
             ),
         ],
       ),
@@ -496,6 +487,9 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
     return parts.join('  ·  ');
   }
 
+  /// Color bubbles next to the Color row's value: the actual saved hex at
+  /// 22px - large enough to read the color at a glance (the old 12px dots
+  /// were effectively invisible). Primary first, accent (if any) beside it.
   Widget _swatches(Item item, AppColors c) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -505,14 +499,14 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
           if (item.colorSecondaryHex != null) item.colorSecondaryHex!,
         ])
           Padding(
-            padding: const EdgeInsets.only(right: 4),
+            padding: const EdgeInsets.only(right: 6),
             child: Container(
-              width: 12,
-              height: 12,
+              width: 22,
+              height: 22,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: Color(int.parse(hex.substring(1), radix: 16)),
-                border: Border.all(color: c.hairline),
+                border: Border.all(color: c.hairline, width: 1),
               ),
             ),
           ),

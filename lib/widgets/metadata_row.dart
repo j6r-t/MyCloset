@@ -15,6 +15,10 @@ class MetadataRow extends StatelessWidget {
 
   /// Shows the trailing pencil edit affordance.
   final bool editable;
+
+  /// Overrides the pencil glyph (e.g. a dropdown chevron on picker rows,
+  /// like Fitted's Garment Type row). Only used when [editable] is true.
+  final IconData? trailingIcon;
   final VoidCallback? onEdit;
 
   const MetadataRow({
@@ -23,6 +27,7 @@ class MetadataRow extends StatelessWidget {
     required this.value,
     this.leading,
     this.editable = false,
+    this.trailingIcon,
     this.onEdit,
   });
 
@@ -55,7 +60,11 @@ class MetadataRow extends StatelessWidget {
                 width: 44,
                 height: 44,
                 child: Center(
-                  child: Icon(AppIcons.edit, size: 20, color: c.inkSecondary),
+                  child: Icon(
+                    trailingIcon ?? AppIcons.edit,
+                    size: 20,
+                    color: c.inkSecondary,
+                  ),
                 ),
               ),
             ),
