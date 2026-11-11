@@ -194,7 +194,7 @@ class _WardrobeScreenState extends State<WardrobeScreen> {
       ),
       child: Column(
         children: [
-          Text(formatTnd(total), style: AppText.headline(context)),
+          Text(formatPrice(total), style: AppText.headline(context)),
           const SizedBox(height: Spacing.m),
           _CategoryChart(items: items),
         ],
@@ -661,66 +661,81 @@ class _CategoryChart extends StatelessWidget {
       ..sort((a, b) => b.value.length.compareTo(a.value.length));
     final maxCount = entries.first.value.length;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        for (final entry in entries)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: SizedBox(
-              width: 72,
-              child: Column(
-                children: [
-                  Text(
-                    formatTndShort(entry.value),
-                    style: AppText.caption(context),
-                  ),
-                  const SizedBox(height: 4),
-                  Container(
-                    height: 32 + (entry.value.length / maxCount) * 72,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: AppColors.category(
-                        entry.key,
-                        Theme.brightnessOf(context),
+    // One 84px block per category (72 block + 2x6 padding), so the row
+    // grows with the wardrobe: six filled categories overflow a narrow
+    // screen (the reported accessory crash). Horizontally scrollable once
+    // it exceeds the width; centered while it fits.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final entry in entries)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: SizedBox(
+                      width: 72,
+                      child: Column(
+                        children: [
+                          Text(
+                            formatPriceShort(entry.value),
+                            style: AppText.caption(context),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            height: 32 + (entry.value.length / maxCount) * 72,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: AppColors.category(
+                                entry.key,
+                                Theme.brightnessOf(context),
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text(
+                              '${entry.value.length}',
+                              style: AppText.label(
+                                context,
+                                color:
+                                    entry.key == Category.shoes ? c.ink : c.bg,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(entry.key.name, style: AppText.caption(context)),
+                        ],
                       ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      '${entry.value.length}',
-                      style: AppText.label(
-                        context,
-                        color: entry.key == Category.shoes ? c.ink : c.bg,
-                      ),
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(entry.key.name, style: AppText.caption(context)),
-                ],
-              ),
+              ],
             ),
           ),
-      ],
+        );
+      },
     );
   }
 }
 
-/// Formats a TND value with thin thousands grouping, e.g. "1 240 TND"
+/// Formats a value with thin thousands grouping, e.g. "1 240 USD/EUR"
 /// (design.md section 6.1 headline example).
-String formatTnd(double value) {
+String formatPrice(double value) {
   final whole = value.round().toString();
   final buffered = StringBuffer();
   for (var i = 0; i < whole.length; i++) {
     buffered.write(whole[i]);
     final remaining = whole.length - i - 1;
-    if (remaining > 0 && remaining % 3 == 0) buffered.write(' ');
+    if (remaining > 0 && remaining % 3 == 0) buffered.write('Ã‚Â ');
   }
-  return '${buffered.toString()} TND';
+  return '${buffered.toString()} USD/EUR';
 }
 
-/// Compact value caption for the chart blocks ("128 TND").
-String formatTndShort(List<Item> items) {
+/// Compact value caption for the chart blocks ("128 USD/EUR").
+String formatPriceShort(List<Item> items) {
   final sum = items.fold<double>(0, (total, item) => total + (item.price ?? 0));
-  return '${sum.round()} TND';
+  return '${sum.round()} USD/EUR';
 }
