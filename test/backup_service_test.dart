@@ -73,7 +73,7 @@ void main() {
     final preview = await backup.validateBackup(zipPath);
     expect(preview.valid, isTrue);
     expect(preview.itemCount, 2);
-    expect(preview.schemaVersion, 3);
+    expect(preview.schemaVersion, 4);
 
     // Damage the live data, then restore.
     await db.deleteItem(kept);

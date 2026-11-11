@@ -20,6 +20,9 @@ import '../models/outfit.dart';
 // app level (see [_assertLayerTypeAllowed]) while fresh installs get it in
 // the DDL directly. v3 (2026-11-10) added app_settings, a tiny key-value
 // table for app-level preferences (theme mode) that must survive restarts.
+// v4 (2026-11-10) added items.condition (Fitted-inspired fixed vocabulary,
+// nullable); the same SQLite limitation applies, so migrated databases rely
+// on the app-level vocabulary guard while fresh DDL carries the CHECK.
 // Never edit an applied migration: append a new step to
 // [AppDatabase.migration]'s onUpgrade instead.
 // ---------------------------------------------------------------------------
@@ -36,6 +39,9 @@ class ItemsTable extends Table {
   // v2: null except top/outerwear; CHECK mirrored in the v2 DDL and enforced
   // at app level on migrated databases.
   TextColumn get layerType => text().nullable()();
+  // v4: nullable Fitted-inspired condition; CHECK mirrored in the v4 DDL and
+  // enforced at app level on migrated databases.
+  TextColumn get condition => text().nullable()();
   TextColumn get season => text().withDefault(const Constant('all'))();
   TextColumn get fabric => text().nullable()();
   TextColumn get notes => text().nullable()();
@@ -92,7 +98,7 @@ class AppDatabase extends GeneratedDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   Iterable<TableInfo> get allTables => const [];
@@ -123,6 +129,13 @@ class AppDatabase extends GeneratedDatabase {
             // table changes, so no data migration is needed.
             await customStatement(appSettingsDdl);
           }
+          if (from < 4) {
+            // v3 -> v4 (Fitted-inspired item condition). SQLite cannot add
+            // a CHECK constraint with ALTER TABLE, so the fixed vocabulary
+            // is validated in [_assertConditionAllowed] on every write
+            // instead.
+            await customStatement('ALTER TABLE items ADD COLUMN condition TEXT');
+          }
         },
         beforeOpen: (details) async {
           // Enforce the FK cascade declared in the DDL (item deletion
@@ -141,8 +154,9 @@ class AppDatabase extends GeneratedDatabase {
     )
   ''';
 
-  /// DDL for schema version 3 (fresh installs). Unlike the ALTER-based
-  /// migration path this can carry the layer_type CHECK constraint.
+  /// DDL for schema version 4 (fresh installs). Unlike the ALTER-based
+  /// migration path this can carry the layer_type and condition CHECK
+  /// constraints.
   static const List<String> schemaStatements = [
     '''
     CREATE TABLE IF NOT EXISTS items (
@@ -154,6 +168,7 @@ class AppDatabase extends GeneratedDatabase {
       price REAL,
       size TEXT,
       layer_type TEXT CHECK (layer_type IN ('inner','outer','both')),
+      condition TEXT CHECK (condition IN ('new_with_tags','new_without_tags','like_new','good','worn')),
       season TEXT NOT NULL DEFAULT 'all' CHECK (season IN ('summer','winter','all')),
       fabric TEXT,
       notes TEXT,
@@ -250,6 +265,22 @@ class AppDatabase extends GeneratedDatabase {
     }
   }
 
+  /// Throws when [condition] carries a value outside the fixed v4 vocabulary
+  /// (docs/backend.md 2.1). The type system already guarantees this for the
+  /// typed write path; the guard exists for the same reason as
+  /// [_assertLayerTypeAllowed]: databases migrated from schema v3 have no
+  /// DDL CHECK on the column, so this is the only line of defense.
+  static void _assertConditionAllowed(Condition? condition) {
+    if (condition != null &&
+        !Condition.values.any((c) => c.dbValue == condition.dbValue)) {
+      throw ArgumentError.value(
+        condition,
+        'condition',
+        'condition must use the fixed schema v4 vocabulary',
+      );
+    }
+  }
+
   /// Inserts an item row and returns its generated id.
   Future<int> insertItem({
     required String name,
@@ -259,6 +290,7 @@ class AppDatabase extends GeneratedDatabase {
     double? price,
     String? size,
     LayerType? layerType,
+    Condition? condition,
     Season season = Season.all,
     String? fabric,
     String? notes,
@@ -271,14 +303,15 @@ class AppDatabase extends GeneratedDatabase {
     DateTime? createdAt,
   }) {
     _assertLayerTypeAllowed(category, layerType);
+    _assertConditionAllowed(condition);
     return customInsert(
       '''
       INSERT INTO items (
-        name, category, subtype, brand, price, size, layer_type, season,
-        fabric, notes, color_primary_hex, color_primary_name,
+        name, category, subtype, brand, price, size, layer_type, condition,
+        season, fabric, notes, color_primary_hex, color_primary_name,
         color_secondary_hex, color_secondary_name, image_path, cutout_path,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ''',
       variables: [
         Variable(name),
@@ -288,6 +321,7 @@ class AppDatabase extends GeneratedDatabase {
         Variable(price),
         Variable(size),
         Variable(layerType?.name),
+        Variable(condition?.dbValue),
         Variable(season.name),
         Variable(fabric),
         Variable(notes),
@@ -331,12 +365,13 @@ class AppDatabase extends GeneratedDatabase {
   /// Rewrites all editable fields of an item from its model.
   Future<void> updateItem(Item item) {
     _assertLayerTypeAllowed(item.category, item.layerType);
+    _assertConditionAllowed(item.condition);
     return customStatement(
       '''
       UPDATE items SET
         name = ?, category = ?, subtype = ?, brand = ?, price = ?,
-        size = ?, layer_type = ?, season = ?, fabric = ?, notes = ?,
-        color_primary_hex = ?, color_primary_name = ?,
+        size = ?, layer_type = ?, condition = ?, season = ?, fabric = ?,
+        notes = ?, color_primary_hex = ?, color_primary_name = ?,
         color_secondary_hex = ?, color_secondary_name = ?,
         image_path = ?, cutout_path = ?
       WHERE id = ?
@@ -349,6 +384,7 @@ class AppDatabase extends GeneratedDatabase {
         item.price,
         item.size,
         item.layerType?.name,
+        item.condition?.dbValue,
         item.season.name,
         item.fabric,
         item.notes,
@@ -510,6 +546,7 @@ class AppDatabase extends GeneratedDatabase {
       price: row.readNullable<double>('price'),
       size: row.readNullable<String>('size'),
       layerType: layerTypeFromDb(row.readNullable<String>('layer_type')),
+      condition: conditionFromDb(row.readNullable<String>('condition')),
       season: seasonFromDb(row.read<String>('season')),
       fabric: row.readNullable<String>('fabric'),
       notes: row.readNullable<String>('notes'),

@@ -19,6 +19,11 @@ class Item {
   /// Layering role, only set for top/outerwear items (schema v2). Null for
   /// every other category; see [LayerType] for the engine rule this drives.
   final LayerType? layerType;
+
+  /// Item condition (schema v4, Fitted-inspired). Nullable - the user is
+  /// never forced to grade a piece; see [Condition] for the fixed vocabulary.
+  final Condition? condition;
+
   final Season season;
   final String? fabric;
   final String? notes;
@@ -50,6 +55,7 @@ class Item {
     this.price,
     this.size,
     this.layerType,
+    this.condition,
     this.season = Season.all,
     this.fabric,
     this.notes,
@@ -71,6 +77,7 @@ class Item {
     double? price,
     String? size,
     LayerType? layerType,
+    Condition? condition,
     Season? season,
     String? fabric,
     String? notes,
@@ -91,6 +98,7 @@ class Item {
       price: price ?? this.price,
       size: size ?? this.size,
       layerType: layerType ?? this.layerType,
+      condition: condition ?? this.condition,
       season: season ?? this.season,
       fabric: fabric ?? this.fabric,
       notes: notes ?? this.notes,

@@ -17,7 +17,7 @@ import '../widgets/named_color_picker.dart';
 /// Screen 4 - Add item, details; also the edit form (userFlow.md flow 4,
 /// step 2, pre-filled). Fields in Fitted's order (design.md section 6.4):
 /// Value, Brand, Type, Garment Type, Size, Layer Type (top/outerwear only),
-/// Color, Season, Fabric, Notes. Name is optional and defaults to
+/// Color, Condition, Season, Fabric, Notes. Name is optional and defaults to
 /// "Piece #id" on save.
 class DetailsFormScreen extends StatefulWidget {
   /// Draft original path when creating from the capture flow.
@@ -50,7 +50,19 @@ class DetailsFormScreen extends StatefulWidget {
 }
 
 /// The rows the identification run can touch.
-enum _AutoField { name, brand, price, subtype }
+enum _AutoField { name, brand, price, subtype, size, layerType }
+
+/// Display label for a [Condition] (Fitted's wording); the enum's camelCase
+/// names are identifiers, not UI copy, and the database stores the
+/// snake_case dbValue - so the wording lives here, next to the only rows
+/// that render it. Shared with the item detail screen.
+String conditionLabel(Condition condition) => switch (condition) {
+      Condition.newWithTags => 'New with tags',
+      Condition.newWithoutTags => 'New without tags',
+      Condition.likeNew => 'Like new',
+      Condition.good => 'Good',
+      Condition.worn => 'Worn',
+    };
 
 class _DetailsFormScreenState extends State<DetailsFormScreen> {
   final _formKey = GlobalKey<FormState>();
@@ -65,6 +77,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
   late Category _category;
   late Season _season;
   LayerType? _layerType;
+  Condition? _condition;
   late String _primaryHex;
   String? _primaryName;
   late String? _secondaryHex;
@@ -111,6 +124,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
     _category = existing?.category ?? Category.top;
     _season = existing?.season ?? Season.all;
     _layerType = existing?.layerType;
+    _condition = existing?.condition;
 
     // Fallback colors before (possible) extraction returns.
     const fallback = NamedColor('grey', '#8A8A8A');
@@ -265,16 +279,23 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
 
     try {
       if (widget.existing != null) {
+        final existing = widget.existing!;
+        // Built explicitly instead of via copyWith: an optional field the
+        // user cleared (layer type pill toggled off, condition deselected)
+        // must write null, which copyWith's null-preserving defaults cannot
+        // express.
         await state.updateItem(
-          widget.existing!.copyWith(
+          Item(
+            id: existing.id,
             // Name optional: falls back to the Piece #<id> default.
-            name: name.isEmpty ? 'Piece #${widget.existing!.id}' : name,
+            name: name.isEmpty ? 'Piece #${existing.id}' : name,
             category: _category,
             subtype: _blankToNull(_subtype.text),
             brand: _blankToNull(_brand.text),
             price: price,
             size: _blankToNull(_size.text),
-            layerType: _layerType,
+            layerType: _canLayer ? _layerType : null,
+            condition: _condition,
             season: _season,
             fabric: _blankToNull(_fabric.text),
             notes: _blankToNull(_notes.text),
@@ -282,6 +303,9 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
             colorPrimaryName: _primaryName,
             colorSecondaryHex: _secondaryHex,
             colorSecondaryName: _secondaryName,
+            imagePath: existing.imagePath,
+            cutoutPath: existing.cutoutPath,
+            createdAt: existing.createdAt,
           ),
         );
         if (mounted) Navigator.of(context).pop();
@@ -296,6 +320,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
           price: price,
           size: _blankToNull(_size.text),
           layerType: _layerType,
+          condition: _condition,
           season: _season,
           fabric: _blankToNull(_fabric.text),
           notes: _blankToNull(_notes.text),
@@ -335,20 +360,37 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
       context.getInheritedWidgetOfExactType<AppStateScope>()?.notifier;
 
   /// Applies the identification screen's successful result: a suggestion
-  /// only ever lands in an EMPTY field - the user's text always wins.
-  /// Each filled row shows a brief "auto" chip (2s) so the user sees what
-  /// the search contributed.
+  /// only ever lands in an EMPTY field - the user's text always wins. Each
+  /// filled row shows a brief "auto" chip (2s) so the user sees what the
+  /// search contributed.
   void _applyPrefill(IdentificationResult result) {
     final applied = <_AutoField>{};
+    final name = result.suggestedName;
+    if (name != null && _name.text.trim().isEmpty) {
+      _name.text = name;
+      applied.add(_AutoField.name);
+    }
     final brand = result.suggestedBrand;
     if (brand != null && _brand.text.trim().isEmpty) {
       _brand.text = brand;
       applied.add(_AutoField.brand);
     }
-    final type = result.suggestedType;
-    if (type != null && _subtype.text.trim().isEmpty) {
-      _subtype.text = type;
+    final subtype = result.suggestedSubtype;
+    if (subtype != null && _subtype.text.trim().isEmpty) {
+      _subtype.text = subtype;
       applied.add(_AutoField.subtype);
+    }
+    final size = result.suggestedSize;
+    if (size != null && _size.text.trim().isEmpty) {
+      _size.text = size;
+      applied.add(_AutoField.size);
+    }
+    final layerType = result.suggestedLayerType;
+    // Only top/outerwear carry a layering role; other categories keep their
+    // null default (backend.md section 2.1).
+    if (layerType != null && _canLayer && _layerType == null) {
+      _layerType = layerType;
+      applied.add(_AutoField.layerType);
     }
     final price = result.suggestedPriceValue?.toString() ??
         _parseablePrice(result.suggestedPriceText);
@@ -545,12 +587,16 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                 },
               ),
               _Row(
+                key: const ValueKey('row-size'),
                 label: 'Size',
+                suffix: _rowSuffix(_AutoField.size),
                 child: _textField(_size, hint: 'M, 40…'),
               ),
               if (_canLayer)
                 _Row(
+                  key: const ValueKey('row-layer-type'),
                   label: 'Layer Type',
+                  suffix: _rowSuffix(_AutoField.layerType),
                   child: Wrap(
                     spacing: Spacing.s,
                     children: [
@@ -617,6 +663,29 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
                     ),
                   ),
                 ),
+              // Condition (schema v4, Fitted-inspired): optional pill
+              // selector like Layer Type, any category; tapping the active
+              // pill deselects it.
+              _Row(
+                key: const ValueKey('row-condition'),
+                label: 'Condition',
+                child: Wrap(
+                  spacing: Spacing.s,
+                  runSpacing: Spacing.s,
+                  children: [
+                    for (final condition in Condition.values)
+                      FilterPill(
+                        key: ValueKey('condition-${condition.dbValue}'),
+                        label: conditionLabel(condition),
+                        active: _condition == condition,
+                        compact: true,
+                        onTap: () => setState(() {
+                          _condition = _condition == condition ? null : condition;
+                        }),
+                      ),
+                  ],
+                ),
+              ),
               _Row(
                 label: 'Season',
                 child: Row(

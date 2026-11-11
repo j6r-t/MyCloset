@@ -242,7 +242,15 @@ class _OutcomeView extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
     final notes = failure?.notes ?? const <String>[];
-    final reasons = notes.isEmpty ? 'No identification available.' : notes.join(' ');
+    // The pipeline's "matches without extractable detail" outcome gets its
+    // own gentler caption - matches were found, they just filled nothing.
+    final matchesWithoutDetails =
+        notes.any((n) => n.contains('No recognizable product details'));
+    final reasons = matchesWithoutDetails
+        ? 'Found matches, but nothing we could fill in'
+        : notes.isEmpty
+            ? 'No identification available.'
+            : notes.join(' ');
 
     return Column(
       mainAxisSize: MainAxisSize.min,

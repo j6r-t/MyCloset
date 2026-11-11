@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 
+import 'package:my_closet/models/enums.dart';
 import 'package:my_closet/services/identification_pipeline.dart';
 import 'package:my_closet/services/serpapi_service.dart';
 import 'package:my_closet/services/vision_web_service.dart';
@@ -399,6 +400,191 @@ void main() {
       );
       expect(result.ok, isFalse);
       expect(result.notes.single, contains('image'));
+    });
+  });
+
+  group('ok semantics (backend.md 5b)', () {
+    test('matches without any extractable detail are NOT ok', () async {
+      final image = await _tempImage();
+      final client = _FakeClient((request) async {
+        final url = request.url.toString();
+        if (url.startsWith('https://serpapi.com/image')) {
+          return _json(_serpUploadOk);
+        }
+        if (url.startsWith('https://serpapi.com/search.json')) {
+          return _json({
+            'visual_matches': [
+              {
+                'title': 'Check out our summer sale now',
+                'link': 'https://shop.example.com/summer-sale',
+                'source': 'shop.example.com',
+              },
+              {
+                'title': 'About us | Fashion Blog',
+                'link': 'https://blog.example.com/about',
+                'source': 'blog.example.com',
+              },
+            ],
+          });
+        }
+        fail('unexpected request: $url');
+      });
+
+      final pipeline = IdentificationPipeline(
+        serpApi: SerpApiService(client: client),
+        vision: VisionWebService(client: client),
+      );
+      final result = await pipeline.identify(
+        imagePath: image.path,
+        serpApiKey: _testKey,
+      );
+
+      // The user-reported bug: ok-but-empty must land on the not-found
+      // outcome so the screen shows it instead of a bare details form.
+      expect(result.ok, isFalse);
+      expect(result.matches, isEmpty);
+      expect(
+        result.notes.any(
+          (n) => n.contains('No recognizable product details'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('lens success fills name, subtype, size and layer type', () async {
+      final image = await _tempImage();
+      final client = _FakeClient((request) async {
+        final url = request.url.toString();
+        if (url.startsWith('https://serpapi.com/image')) {
+          return _json(_serpUploadOk);
+        }
+        if (url.startsWith('https://serpapi.com/search.json')) {
+          return _json({
+            'knowledge_graph': {'title': 'Adidas'},
+            'visual_matches': [
+              {
+                'title': 'Adidas Campus 00s sneakers size 42',
+                'link': 'https://www.adidas.com/us/campus-00s',
+                'source': 'adidas.com',
+              },
+            ],
+          });
+        }
+        fail('unexpected request: $url');
+      });
+
+      final pipeline = IdentificationPipeline(
+        serpApi: SerpApiService(client: client),
+        vision: VisionWebService(client: client),
+      );
+      final result = await pipeline.identify(
+        imagePath: image.path,
+        serpApiKey: _testKey,
+      );
+
+      expect(result.ok, isTrue);
+      expect(result.suggestedName, 'Campus 00s sneakers size 42');
+      expect(result.suggestedBrand, 'Adidas');
+      expect(result.suggestedSubtype, 'sneakers');
+      expect(result.suggestedLayerType, isNull);
+      expect(result.suggestedSize, '42');
+    });
+  });
+
+  group('title extraction (table-driven)', () {
+    test('subtypeFromTitle: first dictionary hit wins', () {
+      final cases = <String, String?>{
+        'Adidas Campus 00s sneakers size 42': 'sneakers',
+        'MCM red hoodie': 'hoodie',
+        'Nike Sportswear Club Fleece sweatshirt': 'sweatshirt',
+        'Levi\'s 501 Original jeans': 'jeans',
+        'Men\'s Oxford shirt': 'shirt',
+        'Classic Polo': 'polo',
+        'Wool winter coat': 'coat',
+        'Cargo pants beige': 'cargo pants',
+        'Summer floral dress': 'dress',
+        'Leather belt brown': 'belt',
+        'Check out our summer sale now': null,
+        '': null,
+      };
+      cases.forEach((title, expected) {
+        expect(IdentificationPipeline.subtypeFromTitle(title), expected,
+            reason: 'title: $title');
+      });
+      expect(IdentificationPipeline.subtypeFromTitle(null), isNull);
+    });
+
+    test('layerTypeFromSubtype maps the layering vocabulary', () {
+      final cases = <String, LayerType?>{
+        't-shirt': LayerType.inner,
+        'shirt': LayerType.inner,
+        'polo': LayerType.inner,
+        'dress': LayerType.inner,
+        'hoodie': LayerType.both,
+        'sweatshirt': LayerType.both,
+        'sweater': LayerType.both,
+        'jacket': LayerType.outer,
+        'coat': LayerType.outer,
+        'blazer': LayerType.outer,
+        'sneakers': null,
+        'jeans': null,
+      };
+      cases.forEach((subtype, expected) {
+        expect(IdentificationPipeline.layerTypeFromSubtype(subtype), expected,
+            reason: 'subtype: $subtype');
+      });
+      expect(IdentificationPipeline.layerTypeFromSubtype(null), isNull);
+    });
+
+    test('sizeFromTitle: letter and European numeric tokens', () {
+      final cases = <String, String?>{
+        'Adidas Campus 00s sneakers size 42': '42',
+        'Nike tee size M': 'M',
+        'Slim fit blazer XL': 'XL',
+        'Eu 40 leather boots': '40',
+        'Adidas Samba white': null,
+        'One size scarf': null, // no standalone size token
+        'MCM red hoodie': null,
+      };
+      cases.forEach((title, expected) {
+        expect(IdentificationPipeline.sizeFromTitle(title), expected,
+            reason: 'title: $title');
+      });
+      expect(IdentificationPipeline.sizeFromTitle(null), isNull);
+    });
+
+    test('nameFromTitle strips junk, brand prefix, and caps at 40 chars',
+        () {
+      final cases = <String, String?>{
+        'Adidas Campus 00s sneakers size 42': 'Campus 00s sneakers size 42',
+        'campus 80s - END.': 'campus 80s',
+        'Adidas Samba | Zalando': 'Adidas Samba',
+        'MCM red hoodie': 'MCM red hoodie',
+        'Adidas Campus 00s sneakers': 'Campus 00s sneakers',
+        'Check out our summer sale now': 'Check out our summer sale now',
+      };
+      cases.forEach((title, expected) {
+        expect(
+          IdentificationPipeline.nameFromTitle(title, brand: 'Adidas'),
+          expected,
+          reason: 'title: $title',
+        );
+      });
+      // A 2-word title keeps both words even when the brand repeats.
+      expect(
+        IdentificationPipeline.nameFromTitle('Adidas Campus',
+            brand: 'Adidas'),
+        'Adidas Campus',
+      );
+      // Longer than 40 chars: cut on a word boundary.
+      final long = IdentificationPipeline.nameFromTitle(
+        'Premium Handcrafted Artisanal Leather Sneaker Edition Collection',
+        brand: null,
+      );
+      expect(long!.length, lessThanOrEqualTo(40));
+      expect(long, isNot(endsWith(' ')));
+      expect(IdentificationPipeline.nameFromTitle(null), isNull);
+      expect(IdentificationPipeline.nameFromTitle('   '), isNull);
     });
   });
 

@@ -425,6 +425,16 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
             leading: _swatches(item, c),
             value: Text(_colorsLine(item), style: AppText.value(context)),
           ),
+          // Condition only when graded (it stays optional in the form).
+          if (item.condition != null)
+            MetadataRow(
+              key: const ValueKey('row-condition'),
+              label: 'Condition',
+              value: Text(
+                conditionLabel(item.condition!),
+                style: AppText.value(context),
+              ),
+            ),
           MetadataRow(
             label: 'Season',
             editable: true,

@@ -18,6 +18,22 @@ enum Season { summer, winter, all }
 /// additionally fill an outfit's outerwear slot (backend.md 5.1).
 enum LayerType { inner, outer, both }
 
+/// Item condition (schema v4, Fitted-inspired). Fixed vocabulary; stored as
+/// the snake_case [dbValue] strings, which is why the enum carries them
+/// explicitly instead of relying on `.name`.
+enum Condition {
+  newWithTags('new_with_tags'),
+  newWithoutTags('new_without_tags'),
+  likeNew('like_new'),
+  good('good'),
+  worn('worn');
+
+  /// The exact string stored in the `items.condition` column.
+  final String dbValue;
+
+  const Condition(this.dbValue);
+}
+
 /// Slot an item can occupy inside an outfit.
 ///
 /// Invariant enforced in `lib/database/app_database.dart`: an outfit contains
@@ -49,6 +65,16 @@ LayerType? layerTypeFromDb(String? value) {
     if (l.name == value) return l;
   }
   throw ArgumentError.value(value, 'value', 'Unknown layer type');
+}
+
+/// Parses a condition stored in the database (schema v4). Null stays null
+/// (the column is nullable and condition is optional); unknown values throw.
+Condition? conditionFromDb(String? value) {
+  if (value == null) return null;
+  for (final c in Condition.values) {
+    if (c.dbValue == value) return c;
+  }
+  throw ArgumentError.value(value, 'value', 'Unknown condition');
 }
 
 /// Parses an outfit slot stored in the database. Throws on unknown values.

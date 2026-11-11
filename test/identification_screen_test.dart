@@ -136,6 +136,28 @@ void main() {
       expect(find.byType(DetailsFormScreen), findsNothing);
     });
 
+    testWidgets('matches without usable detail get the gentler caption',
+        (tester) async {
+      final state = stubState();
+      state.serpApiKeySet = true;
+      state.onRun = () async => IdentificationResult.unavailable(
+            const ['No recognizable product details in the results.'],
+          );
+
+      await pumpScreen(tester, state);
+
+      expect(state.runCount, 1);
+      expect(find.text("Couldn't identify this piece"), findsOneWidget);
+      expect(
+        find.text('Found matches, but nothing we could fill in'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('No recognizable product details in the results.'),
+        findsNothing,
+      );
+    });
+
     testWidgets('the retry pill re-runs once, then disappears', (tester) async {
       final state = stubState();
       state.serpApiKeySet = true;

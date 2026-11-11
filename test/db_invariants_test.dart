@@ -11,7 +11,7 @@ import 'package:my_closet/models/enums.dart';
 /// - dress XOR top+bottom exclusivity per outfit
 /// - deleting an item cascades into outfit_items
 /// - schema CHECK constraints and defaults hold
-/// - the v1 -> v2 migration preserves rows and adds the new columns
+/// - the v1 -> v4 migration preserves rows and adds the new columns
 void main() {
   late AppDatabase db;
 
@@ -255,6 +255,42 @@ void main() {
     });
   });
 
+  group('schema v4 column (backend.md 2.1)', () {
+    test('fresh install enforces the condition CHECK in the DDL', () async {
+      expect(
+        () => db.customStatement('''
+          INSERT INTO items (
+            name, category, condition, color_primary_hex,
+            image_path, cutout_path, created_at
+          ) VALUES ('Raw', 'top', 'threadbare', '#1C2B4A', 'o.jpg', 'c.png', 0)
+        '''),
+        throwsA(anything),
+      );
+      // Every vocabulary value is accepted; null stays allowed.
+      final values = Condition.values.map((c) => c.dbValue).toList();
+      for (final value in values) {
+        await db.customStatement('DELETE FROM items');
+        await db.customStatement(
+          'INSERT INTO items ('
+          '  name, category, condition, color_primary_hex,'
+          '  image_path, cutout_path, created_at'
+          ') VALUES (?, ?, ?, ?, ?, ?, ?)',
+          ['Ok', 'top', value, '#1C2B4A', 'o.jpg', 'c.png', 0],
+        );
+        final rows = await db.customSelect('SELECT condition FROM items').get();
+        expect(rows.single.read<String>('condition'), value);
+      }
+      await db.customStatement('DELETE FROM items');
+      await db.customStatement('''
+        INSERT INTO items (
+          name, category, color_primary_hex, image_path, cutout_path, created_at
+        ) VALUES ('No grade', 'top', '#1C2B4A', 'o.jpg', 'c.png', 0)
+      ''');
+      final rows = await db.customSelect('SELECT condition FROM items').get();
+      expect(rows.single.readNullable<String>('condition'), isNull);
+    });
+  });
+
   group('v1 -> v2 migration (backend.md 2.1)', () {
     test('upgrades a real v1 file, preserving rows and gaining columns',
         () async {
@@ -283,13 +319,13 @@ void main() {
       ''');
       await legacy.close();
 
-      // Opening through AppDatabase runs the v1 -> v3 migrations.
+      // Opening through AppDatabase runs the v1 -> v4 migrations.
       final migrated = AppDatabase(NativeDatabase(dbFile));
       final version = await migrated
           .customSelect('PRAGMA user_version')
           .get()
           .then((rows) => rows.first.read<int>('user_version'));
-      expect(version, 3);
+      expect(version, 4);
 
       // Rows survived with nulls in the new columns.
       final items = await migrated.getAllItems();
@@ -297,6 +333,7 @@ void main() {
       for (final item in items) {
         expect(item.size, isNull);
         expect(item.layerType, isNull);
+        expect(item.condition, isNull);
       }
 
       // The new columns are usable after the migration.
@@ -308,12 +345,13 @@ void main() {
       expect(updated.size, 'M');
       expect(updated.layerType, LayerType.both);
 
-      // Fresh inserts use the full v2 write path.
+      // Fresh inserts use the full v4 write path.
       final newId = await migrated.insertItem(
         name: 'New shirt',
         category: Category.top,
         size: 'L',
         layerType: LayerType.outer,
+        condition: Condition.likeNew,
         colorPrimaryHex: '#FFFFFF',
         imagePath: 'o3.jpg',
         cutoutPath: 'c3.png',
@@ -321,6 +359,51 @@ void main() {
       final fresh = (await migrated.getItem(newId))!;
       expect(fresh.size, 'L');
       expect(fresh.layerType, LayerType.outer);
+      expect(fresh.condition, Condition.likeNew);
+
+      await migrated.close();
+    });
+
+    test('upgrades a genuine v3 file, gaining the condition column',
+        () async {
+      final temp = await Directory.systemTemp.createTemp('mycloset_mig3_');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final dbFile = File(
+        '${temp.path}${Platform.pathSeparator}v3.sqlite',
+      );
+
+      // Build a genuine schema v3 database (v1 DDL + the v2 ALTERs + the
+      // v3 app_settings table), stamped user_version = 3 like the shipped
+      // build.
+      final legacy = _LegacyV3Database(NativeDatabase(dbFile));
+      await legacy.customSelect('SELECT 1').get();
+      await legacy.customStatement('''
+        INSERT INTO items (
+          name, category, size, layer_type, color_primary_hex,
+          image_path, cutout_path, created_at
+        ) VALUES ('Old jeans', 'bottom', '32', NULL, '#1C2B4A',
+          'o.jpg', 'c.png', 1700000000000)
+      ''');
+      await legacy.close();
+
+      final migrated = AppDatabase(NativeDatabase(dbFile));
+      final version = await migrated
+          .customSelect('PRAGMA user_version')
+          .get()
+          .then((rows) => rows.first.read<int>('user_version'));
+      expect(version, 4);
+
+      final jeans = (await migrated.getAllItems()).single;
+      expect(jeans.size, '32');
+      expect(jeans.condition, isNull);
+
+      // The condition column is usable after the migration (app-level
+      // vocabulary - ALTER could not add a CHECK).
+      await migrated.updateItem(jeans.copyWith(condition: Condition.good));
+      expect(
+        (await migrated.getItem(jeans.id))!.condition,
+        Condition.good,
+      );
 
       await migrated.close();
     });
@@ -336,6 +419,7 @@ void main() {
         price: 49.9,
         size: 'M',
         layerType: LayerType.both,
+        condition: Condition.newWithTags,
         season: Season.summer,
         fabric: 'cotton',
         notes: 'favorite',
@@ -356,6 +440,7 @@ void main() {
       expect(item.price, 49.9);
       expect(item.size, 'M');
       expect(item.layerType, LayerType.both);
+      expect(item.condition, Condition.newWithTags);
       expect(item.season, Season.summer);
       expect(item.fabric, 'cotton');
       expect(item.notes, 'favorite');
@@ -372,9 +457,10 @@ void main() {
       expect(reread.name, 'White tee v2');
       expect(reread.price, 39.9);
       expect(reread.category, Category.top);
-      // copyWith keeps untouched v2 fields.
+      // copyWith keeps untouched v2/v4 fields.
       expect(reread.size, 'M');
       expect(reread.layerType, LayerType.both);
+      expect(reread.condition, Condition.newWithTags);
 
       expect(await db.countItems(), 1);
       expect(await db.getItemsByCategory(Category.top), hasLength(1));
@@ -422,6 +508,35 @@ class _LegacyV1Database extends drift.GeneratedDatabase {
           for (final statement in AppDatabase.schemaV1Statements) {
             await customStatement(statement);
           }
+        },
+      );
+}
+
+/// Throwaway drift database producing a genuine v3 file (v1 DDL + the v2
+/// ALTER steps + the v3 app_settings table, stamped user_version = 3),
+/// used to verify the v3 -> v4 condition migration in isolation.
+class _LegacyV3Database extends drift.GeneratedDatabase {
+  _LegacyV3Database(super.executor);
+
+  @override
+  int get schemaVersion => 3;
+
+  @override
+  Iterable<drift.TableInfo> get allTables => const [];
+
+  @override
+  drift.MigrationStrategy get migration => drift.MigrationStrategy(
+        onCreate: (m) async {
+          for (final statement in AppDatabase.schemaV1Statements) {
+            await customStatement(statement);
+          }
+          await customStatement(
+            'ALTER TABLE items ADD COLUMN size TEXT',
+          );
+          await customStatement(
+            'ALTER TABLE items ADD COLUMN layer_type TEXT',
+          );
+          await customStatement(AppDatabase.appSettingsDdl);
         },
       );
 }
