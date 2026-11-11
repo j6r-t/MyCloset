@@ -1,5 +1,5 @@
 name: my_closet
-description: "A new Flutter project."
+description: "Personal Android wardrobe app: on-device cutouts, outfits, and color-harmony suggestions."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
