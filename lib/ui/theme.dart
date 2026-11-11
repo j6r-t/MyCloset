@@ -432,6 +432,7 @@ class AppIcons {
   static const IconData archive = Symbols.archive;
   static const IconData back = Symbols.arrow_back;
   static const IconData brush = Symbols.brush;
+  static const IconData inkEraser = Symbols.ink_eraser;
   static const IconData search = Symbols.search;
   static const IconData undo = Symbols.undo;
   static const IconData expandMore = Symbols.expand_more;

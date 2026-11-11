@@ -35,24 +35,47 @@ class CutoutReviewScreen extends StatefulWidget {
   State<CutoutReviewScreen> createState() => _CutoutReviewScreenState();
 }
 
-/// One eraser stroke: points and radius in image coordinates, plus the
-/// erase strength ([opacity], 0.0-1.0) the stroke was drawn with.
+/// One brush stroke: points and radius in image coordinates, plus the
+/// strength ([opacity], 0.0-1.0) and mode ([restore]) it was drawn with.
 class _EraseStroke {
   final List<Offset> points;
   final double radius;
   final double opacity;
 
-  _EraseStroke(this.points, this.radius, {required this.opacity});
+  /// False = erase alpha (dstOut). True = paint the ORIGINAL cutout's
+  /// pixels back inside the stroke footprint.
+  final bool restore;
+
+  _EraseStroke(
+    this.points,
+    this.radius, {
+    required this.opacity,
+    this.restore = false,
+  });
 }
 
 /// Which brush control is currently being dragged, if any.
 enum _IndicatorMode { none, size, opacity }
+
+/// Active brush: erase removes alpha; restore paints the untouched
+/// segmentation output back over erased areas.
+enum _BrushMode { erase, restore }
 
 class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
   /// The working cutout raster: the original cutout with EVERY committed
   /// stroke already composited in. Single source of truth - strokes
   /// accumulate here permanently, so any number of brush passes survives.
   ui.Image? _image;
+
+  /// The untouched segmentation output. The restore brush paints pixels
+  /// back from here; it and [_image] start as the same raster and diverge
+  /// as strokes commit (commits always produce a fresh raster, never
+  /// mutate in place).
+  ui.Image? _originalImage;
+
+  /// Erase (default) or restore. Restore only has visible effect where
+  /// something was erased, but stays selectable any time.
+  _BrushMode _brushMode = _BrushMode.erase;
 
   /// Working-image snapshots taken just before each committed stroke, for
   /// undo (backend.md section 3.4: effectively "last 5"). Non-empty means
@@ -117,6 +140,9 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
       final frame = await codec.getNextFrame();
       if (mounted) {
         setState(() {
+          // Both fields start as the same untouched raster (see
+          // [_originalImage]); commits never mutate in place.
+          _originalImage = frame.image;
           _image = frame.image;
         });
       }
@@ -160,6 +186,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
         [_toImage(d.localPosition)],
         _brushRadius(),
         opacity: _brushOpacityPct / 100,
+        restore: _brushMode == _BrushMode.restore,
       );
     });
     _moveIndicatorTo(d.localPosition);
@@ -205,31 +232,77 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
     });
   }
 
-  /// Composites one stroke (dstOut hard stamps at its stored opacity) onto
+  /// Footprint of [stroke] as a path in image coordinates: an oval for a
+  /// single tap, the polyline for a drag. Used by both brush modes (the
+  /// erase stroke draws it directly; the restore stroke turns it into a
+  /// masked draw of the original cutout).
+  Path _strokePath(_EraseStroke stroke) {
+    final path = Path();
+    if (stroke.points.length == 1) {
+      path.addOval(
+        Rect.fromCircle(center: stroke.points.first, radius: stroke.radius),
+      );
+      return path;
+    }
+    path.moveTo(stroke.points.first.dx, stroke.points.first.dy);
+    for (final p in stroke.points.skip(1)) {
+      path.lineTo(p.dx, p.dy);
+    }
+    return path;
+  }
+
+  /// Paint that traces [stroke]'s footprint with its opacity: a stroked
+  /// polyline (or filled oval), hard round edge, no blur.
+  Paint _footprintPaint(_EraseStroke stroke) {
+    return Paint()
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = stroke.radius * 2
+      ..color = Colors.black.withValues(alpha: stroke.opacity);
+  }
+
+  /// Commits one stroke (erase = dstOut hard stamps; restore = the original
+  /// cutout masked by the stroke footprint, at its stored opacity) onto
   /// [base] into a fresh raster.
+  ///
+  /// The restore branch works as an alpha mask: the footprint is stroked
+  /// into an isolated layer (alpha = stroke opacity), then the original
+  /// cutout is drawn over it with srcIn, which multiplies the original's
+  /// pixels by the footprint's alpha. Result: exactly the pre-segmentation
+  /// pixels, faded back in at the brush strength, and nothing outside the
+  /// stroke.
   Future<ui.Image> _compositeStroke(ui.Image base, _EraseStroke stroke) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawImage(base, Offset.zero, Paint());
 
-    final erase = Paint()
-      ..blendMode = BlendMode.dstOut
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      // Hard felt-tip edge: no maskFilter, only anti-aliasing. For dstOut
-      // the color is irrelevant - only the alpha carries the erase strength.
-      ..maskFilter = null;
-
-    erase.color = Colors.black.withValues(alpha: stroke.opacity);
-    if (stroke.points.length == 1) {
-      canvas.drawCircle(stroke.points.first, stroke.radius, erase);
-    } else {
-      final path = Path()..moveTo(stroke.points.first.dx, stroke.points.first.dy);
-      for (final p in stroke.points.skip(1)) {
-        path.lineTo(p.dx, p.dy);
+    final original = _originalImage;
+    if (stroke.restore && original != null) {
+      canvas.saveLayer(null, Paint());
+      final footprint = _footprintPaint(stroke);
+      final path = _strokePath(stroke);
+      if (stroke.points.length == 1) {
+        canvas.drawCircle(stroke.points.first, stroke.radius, footprint);
+      } else {
+        canvas.drawPath(path, footprint);
       }
-      erase.strokeWidth = stroke.radius * 2;
-      canvas.drawPath(path, erase);
+      canvas.drawImage(original, Offset.zero, Paint()..blendMode = BlendMode.srcIn);
+      canvas.restore();
+    } else {
+      // Erase: hard felt-tip edge, no maskFilter. For dstOut the color is
+      // irrelevant - only the alpha carries the erase strength.
+      final erase = Paint()
+        ..blendMode = BlendMode.dstOut
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..maskFilter = null
+        ..color = Colors.black.withValues(alpha: stroke.opacity);
+      if (stroke.points.length == 1) {
+        canvas.drawCircle(stroke.points.first, stroke.radius, erase);
+      } else {
+        erase.strokeWidth = stroke.radius * 2;
+        canvas.drawPath(_strokePath(stroke), erase);
+      }
     }
     return recorder.endRecording().toImage(base.width, base.height);
   }
@@ -389,7 +462,13 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                                 child: CustomPaint(
                                   painter: _CutoutPainter(
                                     image: _image!,
+                                    restoreSource: _originalImage,
                                     activeStroke: _activeStroke,
+                                    // The live preview must use the same
+                                    // image->display mapping as the commit
+                                    // path, or the stroke appears fatter
+                                    // and offset while the finger is down.
+                                    scale: _scale,
                                     tileColor: c.tile,
                                   ),
                                 ),
@@ -447,8 +526,9 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                   ),
                 ),
               ),
-              // Eraser brush controls: thickness + opacity. Dragging either
-              // shows the live indicator ring on the canvas.
+              // Eraser panel: brush mode (erase / restore) + thickness and
+              // opacity controls. Dragging either control shows the live
+              // indicator ring on the canvas.
               if (_showEraser && _hasCutout)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
@@ -459,6 +539,32 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                   ),
                   child: Column(
                     children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _ModePill(
+                              icon: AppIcons.inkEraser,
+                              label: 'Erase',
+                              active: _brushMode == _BrushMode.erase,
+                              onTap: () => setState(
+                                () => _brushMode = _BrushMode.erase,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: Spacing.s),
+                          Expanded(
+                            child: _ModePill(
+                              icon: AppIcons.brush,
+                              label: 'Restore',
+                              active: _brushMode == _BrushMode.restore,
+                              onTap: () => setState(
+                                () => _brushMode = _BrushMode.restore,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: Spacing.s),
                       BrushControlRow(
                         icon: AppIcons.brush,
                         label: 'Brush size',
@@ -478,7 +584,9 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                       ),
                       BrushControlRow(
                         icon: Symbols.opacity,
-                        label: 'Eraser opacity',
+                        label: _brushMode == _BrushMode.erase
+                            ? 'Eraser opacity'
+                            : 'Restore opacity',
                         value: _brushOpacityPct.toDouble(),
                         min: 10,
                         max: 100,
@@ -597,17 +705,30 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
 
 /// Paints the eraser canvas: the `tile` gray backdrop first (so erased
 /// transparent areas read as gray, not white - design.md section 6.3),
-/// then the cutout and the in-progress eraser stroke. Strokes erase alpha
-/// (dstOut) with a hard round stamp - anti-aliased, no blur feathering
-/// (backend.md section 3.4).
+/// then the cutout and the in-progress brush stroke. The stroke is drawn
+/// through the same image->display transform the commit path uses
+/// ([scale]), so the preview's thickness and position match the committed
+/// stroke exactly. Erase strokes remove alpha (dstOut); restore strokes
+/// paint the untouched cutout back inside the footprint (see
+/// _CutoutReviewScreenState._compositeStroke for the masking recipe).
 class _CutoutPainter extends CustomPainter {
   final ui.Image image;
+
+  /// The untouched cutout; null disables restore-stroke previews.
+  final ui.Image? restoreSource;
+
   final _EraseStroke? activeStroke;
+
+  /// Display pixels per image pixel (set during layout).
+  final double scale;
+
   final Color tileColor;
 
   _CutoutPainter({
     required this.image,
+    required this.scale,
     required this.tileColor,
+    this.restoreSource,
     this.activeStroke,
   });
 
@@ -627,40 +748,126 @@ class _CutoutPainter extends CustomPainter {
       Paint()..filterQuality = FilterQuality.medium,
     );
 
-    final erase = Paint()
-      ..blendMode = BlendMode.dstOut
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..maskFilter = null;
-
     final stroke = activeStroke;
     if (stroke != null) {
-      erase.color = Colors.black.withValues(alpha: stroke.opacity);
-      erase.strokeWidth = stroke.radius * 2;
-      if (stroke.points.length == 1) {
-        canvas.drawCircle(stroke.points.first, stroke.radius, erase);
-      } else {
-        final path = Path()
-          ..moveTo(stroke.points.first.dx, stroke.points.first.dy);
-        for (final p in stroke.points.skip(1)) {
-          path.lineTo(p.dx, p.dy);
+      // Draw the stroke in image coordinates: scale the canvas the same way
+      // drawImageRect just mapped the image, and clip to the image bounds so
+      // a stroke can never bleed past the garment rect.
+      canvas.save();
+      canvas.scale(scale);
+      canvas.clipRect(
+        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+      );
+
+      if (stroke.restore) {
+        final source = restoreSource;
+        if (source != null) {
+          canvas.saveLayer(null, Paint());
+          final footprint = Paint()
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..strokeWidth = stroke.radius * 2
+            ..color = Colors.black.withValues(alpha: stroke.opacity);
+          if (stroke.points.length == 1) {
+            canvas.drawCircle(stroke.points.first, stroke.radius, footprint);
+          } else {
+            final path = Path()
+              ..moveTo(stroke.points.first.dx, stroke.points.first.dy);
+            for (final p in stroke.points.skip(1)) {
+              path.lineTo(p.dx, p.dy);
+            }
+            canvas.drawPath(path, footprint);
+          }
+          canvas.drawImage(
+            source,
+            Offset.zero,
+            Paint()..blendMode = BlendMode.srcIn,
+          );
+          canvas.restore();
         }
-        canvas.drawPath(path, erase);
+      } else {
+        final erase = Paint()
+          ..blendMode = BlendMode.dstOut
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..maskFilter = null
+          ..color = Colors.black.withValues(alpha: stroke.opacity);
+        if (stroke.points.length == 1) {
+          canvas.drawCircle(stroke.points.first, stroke.radius, erase);
+        } else {
+          erase.strokeWidth = stroke.radius * 2;
+          final path = Path()
+            ..moveTo(stroke.points.first.dx, stroke.points.first.dy);
+          for (final p in stroke.points.skip(1)) {
+            path.lineTo(p.dx, p.dy);
+          }
+          canvas.drawPath(path, erase);
+        }
       }
+      canvas.restore();
     }
     canvas.restore();
   }
 
   @override
   bool shouldRepaint(_CutoutPainter old) =>
-      old.image != image || old.activeStroke != activeStroke;
+      old.image != image ||
+      old.activeStroke != activeStroke ||
+      old.scale != scale;
+}
+
+/// Erase / Restore mode selector pill inside the eraser panel (Fitted's
+/// pill styling: hairline border, ink fill when active).
+class _ModePill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _ModePill({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: Motion.fast,
+        curve: Motion.curve,
+        height: 36,
+        decoration: BoxDecoration(
+          color: active ? c.ink : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: active ? c.ink : c.hairline),
+        ),
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: active ? c.bg : c.inkSecondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: AppText.button(context, color: active ? c.bg : c.ink),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// The live brush indicator ring shown while a thickness or opacity control
-/// is dragged. Drawn in the canvas' local coordinates; [diameter] is in
-/// display pixels, matching exactly what the stamp covers on screen
-/// (radius * 2 * scale). Size mode is a bare ring; opacity mode fills the
-/// interior with black at the current erase alpha.
+/// is dragged.
 class _BrushIndicatorPainter extends CustomPainter {
   final Offset center;
   final double diameter;
