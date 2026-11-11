@@ -36,11 +36,18 @@ class CutoutReviewScreen extends StatefulWidget {
 }
 
 /// One brush stroke: points and radius in image coordinates, plus the
-/// strength ([opacity], 0.0-1.0) and mode ([restore]) it was drawn with.
+/// strength ([opacity], 0.0-1.0), the feather blur ([blurSigma], 0 = hard
+/// edge) and mode ([restore]) it was drawn with.
 class _EraseStroke {
   final List<Offset> points;
   final double radius;
   final double opacity;
+
+  /// Gaussian sigma for the Hardness/Feathering control, in image pixels.
+  /// 0 renders the hard felt-tip edge; higher values feather the stamp's
+  /// edge (both the erase dstOut stamp and the restore mask use it, so the
+  /// committed stroke always matches the preview).
+  final double blurSigma;
 
   /// False = erase alpha (dstOut). True = paint the ORIGINAL cutout's
   /// pixels back inside the stroke footprint.
@@ -50,12 +57,13 @@ class _EraseStroke {
     this.points,
     this.radius, {
     required this.opacity,
+    this.blurSigma = 0,
     this.restore = false,
   });
 }
 
 /// Which brush control is currently being dragged, if any.
-enum _IndicatorMode { none, size, opacity }
+enum _IndicatorMode { none, size, opacity, hardness }
 
 /// Active brush: erase removes alpha; restore paints the untouched
 /// segmentation output back over erased areas.
@@ -97,6 +105,15 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
 
   /// Erase strength in percent (10-100). The stamp's alpha.
   int _brushOpacityPct = 100;
+
+  /// Hardness in percent (0-100). 100 = hard felt-tip edge (no blur);
+  /// lower values feather the stamp edge (Mockup: "Hardness/Feathering").
+  int _brushHardnessPct = 100;
+
+  /// Gaussian sigma (image px) for a stroke at the current hardness:
+  /// feather grows with the stamp radius and falls to 0 at 100%.
+  double _strokeBlurSigma() =>
+      (_brushRadius()) / 3 * (1 - _brushHardnessPct / 100);
 
   /// The control currently dragged - drives the indicator ring.
   _IndicatorMode _indicatorMode = _IndicatorMode.none;
@@ -186,6 +203,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
         [_toImage(d.localPosition)],
         _brushRadius(),
         opacity: _brushOpacityPct / 100,
+        blurSigma: _strokeBlurSigma(),
         restore: _brushMode == _BrushMode.restore,
       );
     });
@@ -251,13 +269,18 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
     return path;
   }
 
-  /// Paint that traces [stroke]'s footprint with its opacity: a stroked
-  /// polyline (or filled oval), hard round edge, no blur.
+  /// Paint that traces [stroke]'s footprint with its opacity and feather:
+  /// a stroked polyline (or filled oval), round caps, blurred by the
+  /// stroke's sigma when feathered. Shared by the restore commit (as the
+  /// mask) and the restore preview.
   Paint _footprintPaint(_EraseStroke stroke) {
     return Paint()
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..strokeWidth = stroke.radius * 2
+      ..maskFilter = stroke.blurSigma > 0
+          ? MaskFilter.blur(BlurStyle.normal, stroke.blurSigma)
+          : null
       ..color = Colors.black.withValues(alpha: stroke.opacity);
   }
 
@@ -289,13 +312,15 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
       canvas.drawImage(original, Offset.zero, Paint()..blendMode = BlendMode.srcIn);
       canvas.restore();
     } else {
-      // Erase: hard felt-tip edge, no maskFilter. For dstOut the color is
-      // irrelevant - only the alpha carries the erase strength.
+      // Erase: the alpha carries the erase strength; the maskFilter carries
+      // the feather (0 sigma = the hard felt-tip edge).
       final erase = Paint()
         ..blendMode = BlendMode.dstOut
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
-        ..maskFilter = null
+        ..maskFilter = stroke.blurSigma > 0
+            ? MaskFilter.blur(BlurStyle.normal, stroke.blurSigma)
+            : null
         ..color = Colors.black.withValues(alpha: stroke.opacity);
       if (stroke.points.length == 1) {
         canvas.drawCircle(stroke.points.first, stroke.radius, erase);
@@ -448,6 +473,11 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                         final showIndicator =
                             mode != _IndicatorMode.none &&
                             _displayRect != Rect.zero;
+                        // Feather of the preview circle, in display px -
+                        // same radius-based recipe as the stroke sigma.
+                        final indicatorFeather =
+                            (_brushSizePx / 2) / 3 *
+                            (1 - _brushHardnessPct / 100);
                         content = GestureDetector(
                           onPanStart: _onPanStart,
                           onPanUpdate: _onPanUpdate,
@@ -491,6 +521,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                                             mode == _IndicatorMode.opacity
                                             ? _brushOpacityPct / 100
                                             : 0,
+                                        featherSigma: indicatorFeather,
                                         ink: c.ink,
                                       ),
                                     ),
@@ -526,9 +557,10 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                   ),
                 ),
               ),
-              // Eraser panel: brush mode (erase / restore) + thickness and
-              // opacity controls. Dragging either control shows the live
-              // indicator ring on the canvas.
+              // Eraser panel: stroke preview pad (the stroke as the current
+              // size/opacity/hardness will render it), mode pills, then the
+              // Size / Opacity / Hardness controls. Dragging any control
+              // shows the live feathered indicator circle on the canvas.
               if (_showEraser && _hasCutout)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
@@ -539,6 +571,26 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                   ),
                   child: Column(
                     children: [
+                      // Stroke preview pad (Mockup: "a top stroke preview
+                      // pad showing a smooth stroke" with the live brush
+                      // settings).
+                      Container(
+                        height: 48,
+                        margin: const EdgeInsets.only(bottom: Spacing.s),
+                        decoration: BoxDecoration(
+                          color: c.tile,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: c.hairline),
+                        ),
+                        child: CustomPaint(
+                          painter: _StrokePreviewPainter(
+                            sizeFraction: _brushSizePx / 64,
+                            opacity: _brushOpacityPct / 100,
+                            hardness: _brushHardnessPct / 100,
+                            ink: c.ink,
+                          ),
+                        ),
+                      ),
                       Row(
                         children: [
                           Expanded(
@@ -567,7 +619,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                       const SizedBox(height: Spacing.s),
                       BrushControlRow(
                         icon: AppIcons.brush,
-                        label: 'Brush size',
+                        label: 'Size (px)',
                         value: _brushSizePx,
                         min: 8,
                         max: 64,
@@ -584,9 +636,7 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                       ),
                       BrushControlRow(
                         icon: Symbols.opacity,
-                        label: _brushMode == _BrushMode.erase
-                            ? 'Eraser opacity'
-                            : 'Restore opacity',
+                        label: 'Opacity (%)',
                         value: _brushOpacityPct.toDouble(),
                         min: 10,
                         max: 100,
@@ -596,6 +646,23 @@ class _CutoutReviewScreenState extends State<CutoutReviewScreen> {
                             _startIndicator(_IndicatorMode.opacity),
                         onChanged: (v) => setState(() {
                           _brushOpacityPct = v.round();
+                        }),
+                        onChangeEnd: () => setState(() {
+                          _indicatorMode = _IndicatorMode.none;
+                        }),
+                      ),
+                      BrushControlRow(
+                        icon: Symbols.blur_on,
+                        label: 'Hardness',
+                        value: _brushHardnessPct.toDouble(),
+                        min: 0,
+                        max: 100,
+                        divisions: 100,
+                        caption: '$_brushHardnessPct%',
+                        onChangeStart: () =>
+                            _startIndicator(_IndicatorMode.hardness),
+                        onChanged: (v) => setState(() {
+                          _brushHardnessPct = v.round();
                         }),
                         onChangeEnd: () => setState(() {
                           _indicatorMode = _IndicatorMode.none;
@@ -767,6 +834,9 @@ class _CutoutPainter extends CustomPainter {
             ..strokeCap = StrokeCap.round
             ..strokeJoin = StrokeJoin.round
             ..strokeWidth = stroke.radius * 2
+            ..maskFilter = stroke.blurSigma > 0
+                ? MaskFilter.blur(BlurStyle.normal, stroke.blurSigma)
+                : null
             ..color = Colors.black.withValues(alpha: stroke.opacity);
           if (stroke.points.length == 1) {
             canvas.drawCircle(stroke.points.first, stroke.radius, footprint);
@@ -790,7 +860,9 @@ class _CutoutPainter extends CustomPainter {
           ..blendMode = BlendMode.dstOut
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..maskFilter = null
+          ..maskFilter = stroke.blurSigma > 0
+              ? MaskFilter.blur(BlurStyle.normal, stroke.blurSigma)
+              : null
           ..color = Colors.black.withValues(alpha: stroke.opacity);
         if (stroke.points.length == 1) {
           canvas.drawCircle(stroke.points.first, stroke.radius, erase);
@@ -866,8 +938,11 @@ class _ModePill extends StatelessWidget {
   }
 }
 
-/// The live brush indicator ring shown while a thickness or opacity control
-/// is dragged.
+/// The live brush indicator circle shown while a thickness, opacity or
+/// hardness control is dragged: a semi-transparent fill at the brush
+/// opacity, with a soft feathered outer edge matching the current
+/// hardness (Mockup: "a dynamic semi-transparent preview circle with a
+/// soft feathered outer edge").
 class _BrushIndicatorPainter extends CustomPainter {
   final Offset center;
   final double diameter;
@@ -875,34 +950,45 @@ class _BrushIndicatorPainter extends CustomPainter {
   /// 0.0-1.0; 0 renders no fill (thickness mode).
   final double fillAlpha;
 
+  /// Gaussian sigma (display px) of the feathered edge; 0 = crisp ring.
+  final double featherSigma;
+
   final Color ink;
 
   _BrushIndicatorPainter({
     required this.center,
     required this.diameter,
     required this.fillAlpha,
+    required this.featherSigma,
     required this.ink,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final r = diameter / 2;
+    final feather = featherSigma > 0
+        ? MaskFilter.blur(BlurStyle.normal, featherSigma)
+        : null;
     if (fillAlpha > 0) {
       canvas.drawCircle(
         center,
         r,
-        Paint()..color = Colors.black.withValues(alpha: fillAlpha),
+        Paint()
+          ..color = Colors.black.withValues(alpha: fillAlpha)
+          ..maskFilter = feather,
       );
     }
     // Subtle white inner/outer outline so the ring reads on any background,
-    // then the ink hairline ring on top.
+    // then the ink hairline ring on top; both pick up the same feather so
+    // the whole indicator softens with the brush.
     canvas.drawCircle(
       center,
       r,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3
-        ..color = Colors.white,
+        ..color = Colors.white
+        ..maskFilter = feather,
     );
     canvas.drawCircle(
       center,
@@ -910,7 +996,8 @@ class _BrushIndicatorPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = ink,
+        ..color = ink
+        ..maskFilter = feather,
     );
   }
 
@@ -918,5 +1005,63 @@ class _BrushIndicatorPainter extends CustomPainter {
   bool shouldRepaint(_BrushIndicatorPainter old) =>
       old.center != center ||
       old.diameter != diameter ||
-      old.fillAlpha != fillAlpha;
+      old.fillAlpha != fillAlpha ||
+      old.featherSigma != featherSigma;
+}
+
+/// The stroke preview pad's painter (Mockup: "a top stroke preview pad
+/// showing a smooth stroke"): one S-curve stroke rendered with the live
+/// brush settings - width follows the size control, alpha the opacity
+/// control, and the edge feathers by the hardness control with the same
+/// sigma recipe as the real stroke, so the pad shows the stroke as the
+/// canvas will commit it.
+class _StrokePreviewPainter extends CustomPainter {
+  /// Brush size / max size (0..1); scales the sample stroke width.
+  final double sizeFraction;
+
+  /// Brush opacity (0..1) - the stroke's alpha.
+  final double opacity;
+
+  /// Hardness (0..1; 1 = hard edge).
+  final double hardness;
+
+  final Color ink;
+
+  _StrokePreviewPainter({
+    required this.sizeFraction,
+    required this.opacity,
+    required this.hardness,
+    required this.ink,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final path = Path()
+      ..moveTo(w * 0.12, h * 0.68)
+      ..cubicTo(w * 0.35, h * 0.08, w * 0.58, h * 0.94, w * 0.88, h * 0.30);
+    final strokeWidth = h * (0.22 + 0.42 * sizeFraction.clamp(0, 1));
+    // Same recipe as the real stamp: sigma = radius/3, falling to 0 at
+    // full hardness.
+    final sigma = (strokeWidth / 2) / 3 * (1 - hardness.clamp(0, 1));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = strokeWidth
+        ..maskFilter = sigma > 0
+            ? MaskFilter.blur(BlurStyle.normal, sigma)
+            : null
+        ..color = Colors.black.withValues(alpha: opacity),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_StrokePreviewPainter old) =>
+      old.sizeFraction != sizeFraction ||
+      old.opacity != opacity ||
+      old.hardness != hardness;
 }
