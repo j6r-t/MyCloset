@@ -5,10 +5,13 @@
 //   1. SerpApi Google Lens over the local image, via the Image API upload
 //      route (SerpApiService.lensSearchByUpload - see that file's header for
 //      why the upload round-trip exists).
-//   2. Only when Lens produced no matches AND on-device hints exist: a
-//      text-mode SerpApi web search reading the shopping_results block
-//      ("brand type category price"), for a price suggestion. Skipped on
-//      invalid-key/quota failures (more calls cannot succeed either).
+//   2. A text-mode SerpApi web search reading the shopping_results block,
+//      for a price suggestion. Runs on BOTH paths: when Lens found nothing
+//      (query from the on-device hints, as before) and when Lens matched
+//      (query from the identified title - without this the Value field
+//      stayed empty on every successful search). Skipped on invalid-key/
+//      quota failures (more calls cannot succeed either). This costs one
+//      extra search per identification on quota-limited plans.
 //   3. Cloud Vision WEB_DETECTION over the same image (accepts base64
 //      content inline - the natural fit for local cutouts).
 //   4. Nothing succeeded: a graceful, non-throwing "no identification
@@ -52,8 +55,8 @@ class IdentificationResult {
   /// duplicated brand prefix dropped, capped at 40 chars).
   final String? suggestedName;
 
-  /// Brand+model guess (SerpApi knowledge_graph title, else Vision's top
-  /// web entity).
+  /// Brand guess: SerpApi knowledge_graph title, else Vision's top web
+  /// entity, else a vote across the match titles via the brand dictionary.
   final String? suggestedBrand;
 
   /// Finer type keyword-matched from the best title ('sneakers', 'hoodie',
@@ -155,7 +158,6 @@ class IdentificationPipeline {
 
     final matches = <IdentifiedMatch>[];
     String? brandSuggestion;
-    IdentifiedMatch? shoppingTop;
     var serpFatalFailure = false;
 
     // Step 1 - SerpApi Google Lens.
@@ -175,17 +177,42 @@ class IdentificationPipeline {
           : null;
     }
 
-    // Step 2 - text-mode shopping lookup, only to salvage a price when Lens
-    // found nothing and a hint exists.
-    if (serpKey.isNotEmpty && !serpFatalFailure && matches.isEmpty) {
-      final hintParts = [
-        brand?.trim(),
-        subtype?.trim(),
-        categoryLabel?.trim(),
-      ].where((p) => p != null && p.isNotEmpty).toList();
-      if (hintParts.isNotEmpty) {
+    // Step 2 - text-mode shopping lookup, to salvage a price on both the
+    // empty-Lens path (query from on-device hints) and the success path
+    // (query from the identified title), so the Value field fills after a
+    // normal search too.
+    IdentifiedMatch? shoppingTop;
+    if (serpKey.isNotEmpty && !serpFatalFailure) {
+      String? query;
+      if (matches.isEmpty) {
+        final hintParts = [
+          brand?.trim(),
+          subtype?.trim(),
+          categoryLabel?.trim(),
+        ].where((p) => p != null && p.isNotEmpty).toList();
+        if (hintParts.isNotEmpty) query = '${hintParts.join(' ')} price';
+      } else {
+        // Lens matched: its best cleaned title is the most specific query
+        // we have; fall back to brand/subtype when the title cleans to
+        // nothing.
+        final prelim = dedupeByUrl(matches);
+        final prelimName =
+            nameFromTitle(prelim.first.title, brand: brandSuggestion)?.trim();
+        if (prelimName != null && prelimName.isNotEmpty) {
+          query = '$prelimName price';
+        } else {
+          final prelimSubtype = subtypeFromMatches(prelim)?.trim();
+          final brandPart = brandSuggestion?.trim();
+          final parts = [
+            brandPart,
+            prelimSubtype,
+          ].where((p) => p != null && p.isNotEmpty).toList();
+          if (parts.isNotEmpty) query = '${parts.join(' ')} price';
+        }
+      }
+      if (query != null) {
         final shopping = await _serpApi.shoppingSearch(
-          query: '${hintParts.join(' ')} price',
+          query: query,
           apiKey: serpKey,
         );
         if (shopping.failure != null) notes.add(shopping.failure!.message);
@@ -215,6 +242,11 @@ class IdentificationPipeline {
     }
 
     final deduped = dedupeByUrl(matches);
+    // Brand fallback: Lens's knowledge_graph (and Vision's top entity) are
+    // usually absent, so vote across the match titles with the brand
+    // dictionary - listing titles overwhelmingly lead with the brand
+    // ("Nike Air Max 90...", "Levi's 501..."). Every earlier signal wins.
+    brandSuggestion ??= brandFromMatches(deduped);
     final bestTitle = deduped.isEmpty ? null : deduped.first.title;
     final suggestedName = nameFromTitle(bestTitle, brand: brandSuggestion);
     // Subtype comes from a vote across all titles (see [subtypeFromMatches]);
@@ -284,6 +316,108 @@ class IdentificationPipeline {
   // visual_matches titles, Vision page titles / URL slugs, shopping titles).
   // All static and table-driven-tested; every helper returns null rather
   // than guessing when its input carries no signal.
+
+  /// Brand dictionary: title keyword -> canonical display name fed to the
+  /// details form's Brand field. This exists because Lens's knowledge_graph
+  /// (the previous brand source) is usually absent, so a successful search
+  /// filled everything except the brand. Curated to words that are safe as
+  /// whole-word matches inside product-listing titles; deliberately no
+  /// ambiguous short words ('On', 'Gap', 'Lee'). Matching mirrors
+  /// [brandFromTitle]: case-insensitive, word boundaries, earliest hit wins.
+  static const List<(String, String)> _brandDictionary = [
+    ('nike', 'Nike'),
+    ('adidas', 'Adidas'),
+    ('puma', 'Puma'),
+    ('new balance', 'New Balance'),
+    ('converse', 'Converse'),
+    ('vans', 'Vans'),
+    ('reebok', 'Reebok'),
+    ('asics', 'Asics'),
+    ('under armour', 'Under Armour'),
+    ('fila', 'Fila'),
+    ('champion', 'Champion'),
+    ('lacoste', 'Lacoste'),
+    ('ralph lauren', 'Ralph Lauren'),
+    ('tommy hilfiger', 'Tommy Hilfiger'),
+    ('calvin klein', 'Calvin Klein'),
+    ('hugo boss', 'Hugo Boss'),
+    ("levi's", "Levi's"),
+    ('levis', "Levi's"),
+    ('wrangler', 'Wrangler'),
+    ('carhartt', 'Carhartt'),
+    ('dickies', 'Dickies'),
+    ('the north face', 'The North Face'),
+    ('north face', 'The North Face'),
+    ('patagonia', 'Patagonia'),
+    ('columbia', 'Columbia'),
+    ("arc'teryx", "Arc'teryx"),
+    ('arcteryx', "Arc'teryx"),
+    ('lululemon', 'Lululemon'),
+    ('uniqlo', 'Uniqlo'),
+    ('zara', 'Zara'),
+    ('h&m', 'H&M'),
+    ('gucci', 'Gucci'),
+    ('prada', 'Prada'),
+    ('louis vuitton', 'Louis Vuitton'),
+    ('balenciaga', 'Balenciaga'),
+    ('burberry', 'Burberry'),
+    ('versace', 'Versace'),
+    ('chanel', 'Chanel'),
+    ('dior', 'Dior'),
+    ('moschino', 'Moschino'),
+    ('diesel', 'Diesel'),
+    ('timberland', 'Timberland'),
+    ('dr. martens', 'Dr. Martens'),
+    ('doc martens', 'Dr. Martens'),
+    ('crocs', 'Crocs'),
+    ('birkenstock', 'Birkenstock'),
+    ('salomon', 'Salomon'),
+    ('merrell', 'Merrell'),
+    ('mcm', 'MCM'),
+  ];
+
+  /// Brand keyword-match against the dictionary ([_brandDictionary]):
+  /// word boundaries, case-insensitive, the hit earliest in the title wins.
+  /// Returns null when nothing hits - never a bare-token guess.
+  static String? brandFromTitle(String? title) {
+    if (title == null) return null;
+    final lower = title.toLowerCase();
+    String? best;
+    var bestPos = -1;
+    for (final (keyword, brand) in _brandDictionary) {
+      final escaped = RegExp.escape(keyword).replaceAll(' ', r'\s+');
+      final match = RegExp('\\b$escaped\\b').firstMatch(lower);
+      if (match == null) continue;
+      if (best == null || match.start < bestPos) {
+        best = brand;
+        bestPos = match.start;
+      }
+    }
+    return best;
+  }
+
+  /// Brand consensus across ALL match titles, same scheme as
+  /// [subtypeFromMatches]: each of the top 8 titles votes for its
+  /// dictionary hit, the first title counts double, highest score wins
+  /// (ties to the subtype seen first). Null when no title hits.
+  static String? brandFromMatches(List<IdentifiedMatch> matches) {
+    const maxVotes = 8;
+    final scores = <String, int>{};
+    for (var i = 0; i < matches.length && i < maxVotes; i++) {
+      final brand = brandFromTitle(matches[i].title);
+      if (brand == null) continue;
+      scores[brand] = (scores[brand] ?? 0) + (i == 0 ? 2 : 1);
+    }
+    String? best;
+    var bestScore = 0;
+    for (final entry in scores.entries) {
+      if (entry.value > bestScore) {
+        best = entry.key;
+        bestScore = entry.value;
+      }
+    }
+    return best;
+  }
 
   /// Ordered subtype dictionary: keyword -> canonical form fed to the
   /// details form. Matching is position-based ([subtypeFromTitle]: the hit

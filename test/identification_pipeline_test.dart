@@ -137,8 +137,8 @@ void main() {
   });
 
   group('pipeline orchestration', () {
-    test('serpapi success: upload + image_id lens search produce matches',
-        () async {
+    test('serpapi success: upload + image_id lens search produce matches, '
+        'then a shopping lookup fills the price', () async {
       final image = await _tempImage();
       var uploadCalls = 0;
       final client = _FakeClient((request) async {
@@ -149,9 +149,29 @@ void main() {
           return _json(_serpUploadOk);
         }
         if (url.startsWith('https://serpapi.com/search.json')) {
-          expect(request.url.queryParameters['engine'], 'google_lens');
-          expect(request.url.queryParameters['image_id'], 'img_123');
-          return _json(_lensBody());
+          final engine = request.url.queryParameters['engine'];
+          if (engine == 'google_lens') {
+            expect(request.url.queryParameters['image_id'], 'img_123');
+            return _json(_lensBody());
+          }
+          // The success path now also runs the shopping lookup (query from
+          // the identified title) so the Value field fills too.
+          if (engine == 'google') {
+            final q = request.url.queryParameters['q']!;
+            expect(q, contains('Campus 00s sneakers'));
+            expect(q, contains('price'));
+            return _json({
+              'shopping_results': [
+                {
+                  'title': 'adidas Campus 00s Shoes',
+                  'price': '\$110.00',
+                  'extracted_price': 110.0,
+                  'product_link': 'https://www.adidas.com/us/campus-00s',
+                  'source': 'adidas.com',
+                },
+              ],
+            });
+          }
         }
         fail('unexpected request: $url');
       });
@@ -167,19 +187,18 @@ void main() {
 
       expect(uploadCalls, 1);
       expect(result.ok, isTrue);
-      expect(result.matches, hasLength(2));
-      expect(result.matches.every((m) => m.sourceTag == 'serpapi'), isTrue);
+      // Lens matches stay first; the shopping entry is appended.
+      expect(result.matches, hasLength(3));
       expect(result.matches.first.title, 'adidas Campus 00s sneakers');
-      expect(result.suggestedBrand, 'Adidas Campus');
-      // Lens succeeded: the shopping salvage step never ran.
       expect(
-        client.requests.where((r) =>
-            r.url.queryParameters['engine'] == 'google'),
-        isEmpty,
+        result.matches.every((m) => m.sourceTag == 'serpapi'),
+        isTrue,
       );
-      // The key was sent to SerpApi endpoints only; nothing else in the
-      // request set.
-      expect(client.requests, hasLength(2));
+      expect(result.suggestedBrand, 'Adidas Campus');
+      expect(result.suggestedPriceValue, 110.0);
+      expect(result.suggestedPriceText, '\$110.00');
+      // Upload + lens search + shopping search.
+      expect(client.requests, hasLength(3));
     });
 
     test('serpapi failure -> vision fallback produces vision-tagged matches',
@@ -412,20 +431,26 @@ void main() {
           return _json(_serpUploadOk);
         }
         if (url.startsWith('https://serpapi.com/search.json')) {
-          return _json({
-            'visual_matches': [
-              {
-                'title': 'Check out our summer sale now',
-                'link': 'https://shop.example.com/summer-sale',
-                'source': 'shop.example.com',
-              },
-              {
-                'title': 'About us | Fashion Blog',
-                'link': 'https://blog.example.com/about',
-                'source': 'blog.example.com',
-              },
-            ],
-          });
+          final engine = request.url.queryParameters['engine'];
+          if (engine == 'google_lens') {
+            return _json({
+              'visual_matches': [
+                {
+                  'title': 'Check out our summer sale now',
+                  'link': 'https://shop.example.com/summer-sale',
+                  'source': 'shop.example.com',
+                },
+                {
+                  'title': 'About us | Fashion Blog',
+                  'link': 'https://blog.example.com/about',
+                  'source': 'blog.example.com',
+                },
+              ],
+            });
+          }
+          // The price-salvage lookup now runs on this path too; it finds
+          // nothing usable and must not flip the outcome to ok.
+          return _json({'shopping_results': []});
         }
         fail('unexpected request: $url');
       });
@@ -459,16 +484,20 @@ void main() {
           return _json(_serpUploadOk);
         }
         if (url.startsWith('https://serpapi.com/search.json')) {
-          return _json({
-            'knowledge_graph': {'title': 'Adidas'},
-            'visual_matches': [
-              {
-                'title': 'Adidas Campus 00s sneakers size 42',
-                'link': 'https://www.adidas.com/us/campus-00s',
-                'source': 'adidas.com',
-              },
-            ],
-          });
+          final engine = request.url.queryParameters['engine'];
+          if (engine == 'google_lens') {
+            return _json({
+              'knowledge_graph': {'title': 'Adidas'},
+              'visual_matches': [
+                {
+                  'title': 'Adidas Campus 00s sneakers size 42',
+                  'link': 'https://www.adidas.com/us/campus-00s',
+                  'source': 'adidas.com',
+                },
+              ],
+            });
+          }
+          return _json({'shopping_results': []});
         }
         fail('unexpected request: $url');
       });
@@ -538,6 +567,49 @@ void main() {
       expect(IdentificationPipeline.subtypeFromMatches([m('Summer sale')]),
           isNull);
       expect(IdentificationPipeline.subtypeFromMatches(const []), isNull);
+    });
+
+    test('brandFromTitle: dictionary hits, earliest position wins', () {
+      final cases = <String, String?>{
+        'Nike Air Max 90 Men\'s Shoes': 'Nike',
+        'adidas Campus 00s sneakers': 'Adidas',
+        'Levi\'s 501 Original jeans': "Levi's",
+        'New Balance 574 sneakers': 'New Balance',
+        'The North Face puffer jacket': 'The North Face',
+        'H&M hoodie': 'H&M',
+        'Campus 00s sneakers': null,
+        'Check out our summer sale now': null,
+        '': null,
+      };
+      cases.forEach((title, expected) {
+        expect(IdentificationPipeline.brandFromTitle(title), expected,
+            reason: 'title: $title');
+      });
+      expect(IdentificationPipeline.brandFromTitle(null), isNull);
+    });
+
+    test('brandFromMatches votes across titles like the subtype vote', () {
+      IdentifiedMatch m(String title) => IdentifiedMatch(
+            title: title,
+            source: 'test',
+            url: 'https://example.com/${title.hashCode}',
+            sourceTag: 'serpapi',
+          );
+      // A knowledge_graph-less Lens run: titles still lead with the brand,
+      // so the vote fills what the form's Brand row used to miss.
+      final matches = [
+        m('Air Max 90 sneakers'),
+        m('Nike Air Max 90 white'),
+        m('Nike Air Max 90 triple black'),
+        m('Nike Sportswear tee'),
+      ];
+      expect(IdentificationPipeline.brandFromMatches(matches), 'Nike');
+      // No dictionary hit anywhere -> null, never a bare-token guess.
+      expect(
+        IdentificationPipeline.brandFromMatches([m('Campus 00s sneakers')]),
+        isNull,
+      );
+      expect(IdentificationPipeline.brandFromMatches(const []), isNull);
     });
 
     test('layerTypeFromSubtype maps the layering vocabulary', () {
