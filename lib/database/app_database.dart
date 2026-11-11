@@ -34,7 +34,7 @@ class ItemsTable extends Table {
   TextColumn get category => text()(); // CHECK: one of the 6 Category values
   TextColumn get subtype => text().nullable()();
   TextColumn get brand => text().nullable()();
-  RealColumn get price => real().nullable()(); // TND
+  RealColumn get price => real().nullable()(); // USD/EUR as entered
   TextColumn get size => text().nullable()(); // v2: free-text size label
   // v2: null except top/outerwear; CHECK mirrored in the v2 DDL and enforced
   // at app level on migrated databases.

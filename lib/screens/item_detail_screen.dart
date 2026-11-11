@@ -336,7 +336,7 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
             onEdit: () => _editText(
               context,
               item,
-              title: 'Value (TND)',
+              title: 'Value (USD/EUR)',
               initial: item.price?.toString(),
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
@@ -348,7 +348,9 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
               ),
             ),
             value: Text(
-              item.price == null ? '—' : '${_formatPrice(item.price!)} TND',
+              item.price == null
+                  ? '—'
+                  : '${_formatPrice(item.price!)} USD/EUR',
               style: AppText.value(context, color: c.money),
             ),
           ),

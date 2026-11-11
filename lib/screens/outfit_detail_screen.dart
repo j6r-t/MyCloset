@@ -493,7 +493,7 @@ class _ComponentRow extends StatelessWidget {
           const SizedBox(width: Spacing.s),
           if (item.price != null)
             Text(
-              '${_formatPrice(item.price!)} TND',
+              '${_formatPrice(item.price!)} USD/EUR',
               style: AppText.value(context, color: c.money),
             ),
           // Per-row edit / delete, 44px touch targets like the metadata

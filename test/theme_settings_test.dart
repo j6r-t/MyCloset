@@ -194,7 +194,7 @@ void main() {
       expect(find.text('Navy tee'), findsOneWidget);
       expect(find.text('White sneakers'), findsOneWidget);
       expect(find.text('BrandX'), findsNWidgets(2));
-      expect(find.text('49.90 TND'), findsOneWidget);
+      expect(find.text('49.90 USD/EUR'), findsOneWidget);
       expect(find.textContaining('Layer: inner'), findsOneWidget);
       // Per-row affordances: one edit next to the name plus one edit and
       // one delete per garment row.

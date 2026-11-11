@@ -10,7 +10,8 @@ class Item {
   final String? subtype;
   final String? brand;
 
-  /// Price in TND, nullable.
+  /// Price as entered (USD/EUR - identification suggestions come back in
+  /// the listing's currency), nullable.
   final double? price;
 
   /// Free-text size label, e.g. 'M', '40', 'one size' (schema v2). Nullable.

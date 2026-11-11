@@ -549,7 +549,7 @@ class _DetailsFormScreenState extends State<DetailsFormScreen> {
               ),
               _Row(
                 key: const ValueKey('row-price'),
-                label: 'Value (TND)',
+                label: 'Value (USD/EUR)',
                 suffix: _rowSuffix(_AutoField.price),
                 child: _textField(
                   _price,
