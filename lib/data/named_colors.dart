@@ -61,7 +61,7 @@ const List<NamedColor> kNamedColors = [
 /// an extracted centroid with less chroma than this is snapped among the
 /// neutral names only, so a black garment photographed warm never lands on
 /// 'chocolate' and an off-white knit never lands on 'blush'.
-const double _neutralSaturationMax = 0.12;
+const double neutralSaturationMax = 0.12;
 
 /// The neutral names a near-achromatic centroid may snap to. Lightness is
 /// what separates them, which is why the snap distance is unweighted for
@@ -87,7 +87,7 @@ const double _chromaWeight = 1.5;
 /// [hex] is not a valid '#RRGGBB' string.
 ///
 /// Naming rules (beyond raw distance):
-/// - A near-neutral centroid (HSV saturation <= [_neutralSaturationMax])
+/// - A near-neutral centroid (HSV saturation <= [neutralSaturationMax])
 ///   snaps among the neutral names only. Raw nearest-color would send a
 ///   slightly warm black to 'chocolate' or a slightly cool white to 'sky
 ///   blue' - real extraction centroids are never perfectly achromatic.
@@ -98,7 +98,7 @@ NamedColor? snapToNamedColor(String hex) {
   final rgb = hexToRgb(hex);
   if (rgb == null) return null;
   final lab = rgbToLab(rgb[0], rgb[1], rgb[2]);
-  final neutral = rgbToHsv(rgb[0], rgb[1], rgb[2]).s <= _neutralSaturationMax;
+  final neutral = rgbToHsv(rgb[0], rgb[1], rgb[2]).s <= neutralSaturationMax;
 
   NamedColor? best;
   var bestDistance = double.infinity;

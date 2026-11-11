@@ -32,6 +32,27 @@ img.Image _twoBands(
   return image;
 }
 
+/// Three horizontal bands: top band [a] for [rowsA] rows, middle band [b]
+/// for [rowsB] rows, rest band [c].
+img.Image _threeBands(
+  int width,
+  int height,
+  List<int> a,
+  List<int> b,
+  List<int> c,
+  int rowsA,
+  int rowsB,
+) {
+  final image = img.Image(width: width, height: height, numChannels: 4);
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      final color = y < rowsA ? a : (y < rowsA + rowsB ? b : c);
+      image.setPixelRgba(x, y, color[0], color[1], color[2], 255);
+    }
+  }
+  return image;
+}
+
 void main() {
   const service = ColorExtractionService();
 
@@ -102,6 +123,88 @@ void main() {
       final result = service.extract(image);
       expect(result.primaryHex, '#00C83C');
       expect(result.secondaryHex, isNull);
+    });
+  });
+
+  group('multi-color garments', () {
+    test('light second color in the Delta E 25-40 band is reported', () {
+      // White (20% share) on sky blue sits at Delta E ~32 - a real second
+      // color (stripes) that the old flat Delta E 40 cutoff dropped, leaving
+      // the secondary empty.
+      final result = service.extract(
+        _twoBands(60, 60, [143, 193, 227], [250, 250, 250], 40),
+      );
+      expect(result.primaryHex, '#8FC1E3');
+      expect(result.secondaryHex, '#FAFAFA');
+    });
+
+    test('kept background halo does not become a phantom secondary', () {
+      // Segmentation sometimes keeps a 1-2 px opaque ring of background
+      // around the garment. The ring is erosion-dropped, so it must not
+      // surface as the item's second color (it used to: a grey halo at 12%
+      // share passed the old Delta E check and became the secondary).
+      final image = img.Image(width: 100, height: 100, numChannels: 4);
+      for (var y = 0; y < 100; y++) {
+        for (var x = 0; x < 100; x++) {
+          if (x >= 20 && x < 80 && y >= 20 && y < 80) {
+            image.setPixelRgba(x, y, 0, 200, 60, 255); // garment
+          } else if (x >= 18 && x < 82 && y >= 18 && y < 82) {
+            image.setPixelRgba(x, y, 200, 200, 200, 255); // kept halo
+          } else {
+            image.setPixelRgba(x, y, 255, 105, 180, 0); // background
+          }
+        }
+      }
+      final report = service.extractWithDiagnostics(image);
+      expect(report.extracted.primaryHex, '#00C83C');
+      expect(report.extracted.secondaryHex, isNull);
+    });
+
+    test('same-hue shade band stays out of the secondary slot', () {
+      // A darker band of the same red at Delta E ~29 - inside the new 25-40
+      // acceptance band. It is lighting, not a second color: same hue, both
+      // chromatic, so the distinctness check must reject it.
+      final result = service.extract(
+        _twoBands(60, 60, [220, 70, 70], [130, 30, 30], 45),
+      );
+      expect(result.secondaryHex, isNull);
+    });
+
+    test('tiny noise cluster under the share floor is not a secondary', () {
+      // A 3%-share tan sliver next to a navy body is Delta E ~70 away -
+      // the old pipeline happily reported it as the secondary color - but
+      // too small to be a real second garment color.
+      final image = img.Image(width: 100, height: 100, numChannels: 4);
+      for (var y = 0; y < 100; y++) {
+        for (var x = 0; x < 100; x++) {
+          if (x < 97) {
+            image.setPixelRgba(x, y, 28, 43, 74, 255); // navy body
+          } else {
+            image.setPixelRgba(x, y, 180, 140, 90, 255); // tan sliver
+          }
+        }
+      }
+      final result = service.extract(image);
+      expect(result.primaryHex, '#1C2B4A');
+      expect(result.secondaryHex, isNull);
+    });
+
+    test('distinct three-color garment reports its two dominant colors', () {
+      // Red body (50%), thin white middle band (13%), blue bottom band (37%):
+      // k = 5 must keep all three centroids alive and report the two largest
+      // distinct colors (red, then blue - not the thinner white band).
+      final image = _threeBands(
+        60,
+        60,
+        [220, 20, 20],
+        [250, 250, 250],
+        [0, 0, 220],
+        30,
+        8,
+      );
+      final result = service.extract(image);
+      expect(result.primaryHex, '#DC1414');
+      expect(result.secondaryHex, '#0000DC');
     });
   });
 
