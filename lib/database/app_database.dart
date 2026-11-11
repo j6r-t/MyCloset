@@ -93,7 +93,28 @@ class AppDatabase extends GeneratedDatabase {
   /// Opens the production database: `closet.sqlite` in the app documents
   /// directory (drift_flutter's default location; the backup service relies
   /// on this path).
-  factory AppDatabase.open() => AppDatabase(driftDatabase(name: 'closet'));
+  ///
+  /// `tempDirectoryPath: () => null` tells drift_flutter to skip its global
+  /// `sqlite3.tempDirectory = ...` assignment (see drift_flutter's
+  /// DriftNativeOptions.tempDirectoryPath docs: returning null leaves the
+  /// temp directory unchanged). That assignment touches the native data
+  /// symbol `sqlite3_temp_directory`, which some SQLite builds on Android do
+  /// not export (the crash surfaced as "Could not resolve native function
+  /// `sqlite3_temp_directory`" when saving an API key). We do not need the
+  /// redirection: the wardrobe DB is tiny, queries are small, and the largest
+  /// temp-space consumer is the few-MB VACUUM INTO backups, which SQLite
+  /// handles with its default temporary location.
+  factory AppDatabase.open() => AppDatabase(
+        driftDatabase(
+          name: 'closet',
+          native: const DriftNativeOptions(tempDirectoryPath: _noTempDirectory),
+        ),
+      );
+
+  /// [DriftNativeOptions.tempDirectoryPath] that never redirects the SQLite
+  /// temporary directory (top-level so the closure stays const-constructible
+  /// and isolate-sendable).
+  static Future<String?> _noTempDirectory() async => null;
 
   AppDatabase(super.executor);
 

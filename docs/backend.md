@@ -85,11 +85,11 @@ Model and interpreter load **once** at app start (lazy on first use is fine); re
 
 ## 4. Color extraction
 
-1. Collect opaque pixels (alpha > 200) from the cutout, downsampled to ≤ 10k samples.
-2. k-means, k=3, 8 iterations, in RGB space.
-3. **Primary** = the cluster with most pixels; **secondary** = the next cluster whose centroid is ≥ ΔE 40 (CIELAB distance) from primary — otherwise no secondary (plain item).
-4. Snap primary hex to a named-color list (~30 curated fashion names: navy, charcoal, cream, burgundy, olive…) = nearest by CIELAB; store both hex + name.
-5. Colors are user-editable on the Details screen (picker = named-color grid, not a free color wheel — keeps the suggestion vocabulary closed).
+1. Collect opaque pixels (alpha > 200) from the cutout, downsampled to ≤ 10k samples; edge erosion drops pixels within 2px of a transparent pixel (segmentation-halo defense; falls back to all opaque samples when fewer than 500 interior pixels remain, so thin straps keep their color).
+2. k-means, k=5, 8 iterations, distance in CIELAB space. Clusters within ΔE 15 of a larger cluster merge (shadow/highlight fragments of one garment color fold together).
+3. **Primary** = the merged cluster with most pixels; **secondary** = the next merged cluster whose centroid is ≥ ΔE 25 from primary, with a two-tier rule: ΔE ≥ 40 is always distinct; 25–40 is distinct only when the difference is not pure lighting (neutral vs chromatic always counts; two chromatics need a hue gap ≥ 20°; two neutrals need a lightness gap ≥ 25). Candidates under 5% sample share are skipped. Otherwise no secondary (plain item).
+4. Snap primary hex to a named-color list (36 curated fashion names: navy, charcoal, cream, burgundy, olive…) = nearest by CIELAB (chroma-weighted 1.5×; near-neutral centroids snap among neutrals only); store both hex + name.
+5. Colors are user-editable on the Details screen (continuous HSV radial wheel — hue around the circle, white center to saturated rim — whose picked hue/saturation snaps to the same closed named-color vocabulary, keeping the suggestion engine's terms fixed).
 
 ## 5. Suggestion engine
 

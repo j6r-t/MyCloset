@@ -57,6 +57,12 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Direct (dev-only) so the sqlite3_temp_directory regression test can
+  # import package:sqlite3; at runtime sqlite3 stays a transitive dependency
+  # of drift_flutter. Version is unconstrained to follow whatever drift
+  # resolves, keeping a single copy in the app and tests.
+  sqlite3: any
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
