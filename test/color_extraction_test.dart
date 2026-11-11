@@ -64,12 +64,26 @@ void main() {
       expect(result.secondaryHex, '#0000FF');
     });
 
-    test('near-identical colors stay a plain item (Delta E < 40)', () {
+    test('near-identical colors merge into one plain item (Delta E < 40)', () {
+      // #FF0000 and #F01010 are lighting variants of one red: after the
+      // merge step they are a single cluster, so the item stays plain and
+      // the primary is the count-weighted centroid of both bands.
       final result = service.extract(
         _twoBands(60, 60, [255, 0, 0], [240, 16, 16], 40),
       );
-      expect(result.primaryHex, '#FF0000');
       expect(result.secondaryHex, isNull);
+      // (255*40 + 240*20) / 60 = 250, same for the weighted G/B channels.
+      expect(result.primaryHex, '#FA0505');
+    });
+
+    test('highlight/shadow fragments merge into the dominant shade', () {
+      // A "shadow" band only 5 RGB steps darker must not survive as a
+      // second cluster - it folds into the main color.
+      final report = service.extractWithDiagnostics(
+        _twoBands(60, 60, [30, 60, 120], [25, 55, 115], 45),
+      );
+      expect(report.clusters, hasLength(1));
+      expect(report.extracted.secondaryHex, isNull);
     });
 
     test('transparent background pixels are ignored', () {

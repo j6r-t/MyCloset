@@ -210,7 +210,11 @@ class IdentificationPipeline {
     final deduped = dedupeByUrl(matches);
     final bestTitle = deduped.isEmpty ? null : deduped.first.title;
     final suggestedName = nameFromTitle(bestTitle, brand: brandSuggestion);
-    final suggestedSubtype = subtypeFromTitle(bestTitle);
+    // Subtype comes from a vote across all titles (see [subtypeFromMatches]);
+    // name and size still come from the single best title - names and sizes
+    // are per-listing facts, while the garment type is shared by every
+    // listing of the same product.
+    final suggestedSubtype = subtypeFromMatches(deduped);
     final suggestedSize = sizeFromTitle(bestTitle);
     final suggestedLayerType = layerTypeFromSubtype(suggestedSubtype);
 
@@ -274,37 +278,83 @@ class IdentificationPipeline {
   // than guessing when its input carries no signal.
 
   /// Ordered subtype dictionary: keyword -> canonical form fed to the
-  /// details form. Order matters - more specific keywords first
-  /// ('t-shirt' before 'shirt', 'cargo pants' before 'pants'...); the first
-  /// hit wins.
+  /// details form. Matching is position-based ([subtypeFromTitle]: the hit
+  /// earliest in the title wins, longer keywords win ties), so compounds
+  /// like 'dress shirt' must be present as their own entries or the first
+  /// word would win the position race.
   static const List<(String, String)> _subtypeDictionary = [
+    // Compounds first (they only win via the length tie-break, but keeping
+    // them documented here keeps the dictionary readable).
     ('t-shirt', 't-shirt'),
+    ('dress shirt', 'shirt'),
     ('polo shirt', 'polo'),
     ('polo', 'polo'),
+    ('turtleneck', 'turtleneck'),
+    ('tank top', 'tank top'),
+    ('cargo pants', 'cargo pants'),
+    ('cargo trousers', 'cargo pants'),
+    ('cargo shorts', 'cargo shorts'),
+    ('track pants', 'track pants'),
+    ('joggers', 'joggers'),
+    ('leggings', 'leggings'),
+    ('dress pants', 'trousers'),
+    ('snow boots', 'boots'),
+    ('ankle boots', 'boots'),
+    ('chelsea boots', 'boots'),
+    ('combat boots', 'boots'),
     ('hoodie', 'hoodie'),
     ('sweatshirt', 'sweatshirt'),
     ('sweater', 'sweater'),
+    ('cardigan', 'cardigan'),
     ('blazer', 'blazer'),
-    ('cargo pants', 'cargo pants'),
+    ('parka', 'parka'),
+    ('puffer', 'puffer jacket'),
+    ('windbreaker', 'windbreaker'),
+    ('bomber', 'bomber jacket'),
     ('jeans', 'jeans'),
     ('denim', 'jeans'),
     ('trousers', 'trousers'),
-    ('chinos', 'trousers'),
+    ('chinos', 'chinos'),
     ('shorts', 'shorts'),
     ('sneakers', 'sneakers'),
     ('sneaker', 'sneakers'),
     ('trainers', 'sneakers'),
     ('trainer', 'sneakers'),
     ('loafers', 'loafers'),
+    ('oxfords', 'oxfords'),
     ('boots', 'boots'),
     ('sandals', 'sandals'),
     ('sandal', 'sandals'),
+    ('slides', 'slides'),
+    ('heels', 'heels'),
+    ('flats', 'flats'),
+    ('blouse', 'blouse'),
+    ('overshirt', 'overshirt'),
     ('dress', 'dress'),
+    ('jumpsuit', 'jumpsuit'),
+    ('romper', 'romper'),
+    ('overalls', 'overalls'),
     ('jacket', 'jacket'),
     ('coat', 'coat'),
+    ('vest', 'vest'),
+    ('suit', 'suit'),
     ('cap', 'cap'),
+    ('beanie', 'beanie'),
+    ('hat', 'hat'),
+    ('sunglasses', 'sunglasses'),
+    ('glasses', 'glasses'),
+    ('watch', 'watch'),
+    ('bracelet', 'bracelet'),
+    ('necklace', 'necklace'),
+    ('ring', 'ring'),
+    ('earrings', 'earrings'),
+    ('gloves', 'gloves'),
+    ('tie', 'tie'),
+    ('wallet', 'wallet'),
     ('belt', 'belt'),
     ('scarf', 'scarf'),
+    ('backpack', 'backpack'),
+    ('tote', 'tote bag'),
     ('bag', 'bag'),
     ('tshirt', 't-shirt'),
     ('tee', 't-shirt'),
@@ -316,27 +366,78 @@ class IdentificationPipeline {
   /// shirts and dresses sit inner.
   static const Map<String, LayerType> _subtypeLayerTypes = {
     't-shirt': LayerType.inner,
+    'tank top': LayerType.inner,
     'shirt': LayerType.inner,
     'polo': LayerType.inner,
+    'blouse': LayerType.inner,
     'dress': LayerType.inner,
     'hoodie': LayerType.both,
     'sweatshirt': LayerType.both,
     'sweater': LayerType.both,
+    'cardigan': LayerType.both,
+    'turtleneck': LayerType.both,
+    'overshirt': LayerType.both,
     'jacket': LayerType.outer,
     'coat': LayerType.outer,
     'blazer': LayerType.outer,
+    'parka': LayerType.outer,
+    'puffer jacket': LayerType.outer,
+    'bomber jacket': LayerType.outer,
+    'windbreaker': LayerType.outer,
+    'vest': LayerType.outer,
   };
 
   /// Keyword-matches [title] against the subtype dictionary (word
-  /// boundaries, case-insensitive). First hit wins; null when nothing hits.
+  /// boundaries, case-insensitive). Position-based: the hit that appears
+  /// earliest in the title wins, and on a shared position the longer
+  /// keyword wins ('dress shirt' beats 'dress' at offset 0; 'cargo pants'
+  /// beats 'pants'). Returns null when nothing hits.
   static String? subtypeFromTitle(String? title) {
     if (title == null) return null;
     final lower = title.toLowerCase();
+    String? best;
+    var bestPos = -1;
+    var bestLen = -1;
     for (final (keyword, subtype) in _subtypeDictionary) {
       final escaped = keyword.replaceAll(' ', r'\s+');
-      if (RegExp('\\b$escaped\\b').hasMatch(lower)) return subtype;
+      final match = RegExp('\\b$escaped\\b').firstMatch(lower);
+      if (match == null) continue;
+      final pos = match.start;
+      final len = keyword.length;
+      if (best == null || pos < bestPos || (pos == bestPos && len > bestLen)) {
+        best = subtype;
+        bestPos = pos;
+        bestLen = len;
+      }
     }
-    return null;
+    return best;
+  }
+
+  /// Subtype consensus across ALL match titles, not just the first: each of
+  /// the top [maxVotes] titles contributes its keyword hit, the first title
+  /// counts double (the ranking put it first), and the highest score wins.
+  /// Ties go to the subtype seen first. Returns null when no title hits.
+  ///
+  /// Voting exists because the single-first-title rule kept filling wrong
+  /// types: one junk listing ("Men's Graphic Tee") outranking nine "Hoodie"
+  /// results flipped the whole suggestion.
+  static String? subtypeFromMatches(List<IdentifiedMatch> matches) {
+    const maxVotes = 8;
+    final scores = <String, int>{};
+    for (var i = 0; i < matches.length && i < maxVotes; i++) {
+      final subtype = subtypeFromTitle(matches[i].title);
+      if (subtype == null) continue;
+      scores[subtype] = (scores[subtype] ?? 0) + (i == 0 ? 2 : 1);
+    }
+    String? best;
+    var bestScore = 0;
+    for (final entry in scores.entries) {
+      if (entry.value > bestScore) {
+        best = entry.key;
+        bestScore = entry.value;
+      }
+    }
+    return best;
   }
 
   /// Maps [subtype] to its layering role, null for subtypes (or nulls)

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import '../services/color_math.dart';
 
 /// A curated fashion color name, per docs/backend.md section 4. The list is
@@ -55,18 +57,59 @@ const List<NamedColor> kNamedColors = [
   NamedColor('forest green', '#228B22'),
 ];
 
+/// HSV saturation below which a color counts as (near) neutral for naming:
+/// an extracted centroid with less chroma than this is snapped among the
+/// neutral names only, so a black garment photographed warm never lands on
+/// 'chocolate' and an off-white knit never lands on 'blush'.
+const double _neutralSaturationMax = 0.12;
+
+/// The neutral names a near-achromatic centroid may snap to. Lightness is
+/// what separates them, which is why the snap distance is unweighted for
+/// this set.
+const Set<String> _neutralNames = {
+  'black',
+  'charcoal',
+  'grey',
+  'silver',
+  'white',
+  'ivory',
+  'cream',
+  'beige',
+};
+
+/// How much more the naming distance cares about chroma (a/b in Lab) than
+/// lightness for chromatic colors: misnaming hue ('navy' -> 'forest green')
+/// reads as wrong far more often than a lightness step ('navy' -> 'royal
+/// blue'), so hue errors must cost more.
+const double _chromaWeight = 1.5;
+
 /// Finds the nearest curated color by CIELAB distance. Returns null when
 /// [hex] is not a valid '#RRGGBB' string.
+///
+/// Naming rules (beyond raw distance):
+/// - A near-neutral centroid (HSV saturation <= [_neutralSaturationMax])
+///   snaps among the neutral names only. Raw nearest-color would send a
+///   slightly warm black to 'chocolate' or a slightly cool white to 'sky
+///   blue' - real extraction centroids are never perfectly achromatic.
+/// - For chromatic colors the a/b (chroma) axes are weighted
+///   [_chromaWeight]x against lightness, since hue mismatches are the
+///   noticeable ones.
 NamedColor? snapToNamedColor(String hex) {
   final rgb = hexToRgb(hex);
   if (rgb == null) return null;
   final lab = rgbToLab(rgb[0], rgb[1], rgb[2]);
+  final neutral = rgbToHsv(rgb[0], rgb[1], rgb[2]).s <= _neutralSaturationMax;
+
   NamedColor? best;
   var bestDistance = double.infinity;
   for (final named in kNamedColors) {
+    if (neutral && !_neutralNames.contains(named.name)) continue;
     final candidateRgb = hexToRgb(named.hex)!;
     final candidateLab = rgbToLab(candidateRgb[0], candidateRgb[1], candidateRgb[2]);
-    final d = labDistance(lab, candidateLab);
+    final dl = lab.l - candidateLab.l;
+    final da = (lab.a - candidateLab.a) * (neutral ? 1.0 : _chromaWeight);
+    final db = (lab.b - candidateLab.b) * (neutral ? 1.0 : _chromaWeight);
+    final d = math.sqrt(dl * dl + da * da + db * db);
     if (d < bestDistance) {
       bestDistance = d;
       best = named;

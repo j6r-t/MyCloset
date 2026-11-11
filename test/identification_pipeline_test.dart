@@ -492,7 +492,8 @@ void main() {
   });
 
   group('title extraction (table-driven)', () {
-    test('subtypeFromTitle: first dictionary hit wins', () {
+    test('subtypeFromTitle: earliest title position wins, compounds beat '
+        'their head word', () {
       final cases = <String, String?>{
         'Adidas Campus 00s sneakers size 42': 'sneakers',
         'MCM red hoodie': 'hoodie',
@@ -504,6 +505,10 @@ void main() {
         'Cargo pants beige': 'cargo pants',
         'Summer floral dress': 'dress',
         'Leather belt brown': 'belt',
+        // 'dress shirt' must win the position tie against 'dress'.
+        'Blue dress shirt slim fit': 'shirt',
+        // 'trench coat' has no jacket keyword, so coat wins on position.
+        'Vintage trench coat': 'coat',
         'Check out our summer sale now': null,
         '': null,
       };
@@ -512,6 +517,27 @@ void main() {
             reason: 'title: $title');
       });
       expect(IdentificationPipeline.subtypeFromTitle(null), isNull);
+    });
+
+    test('subtypeFromMatches votes across titles instead of trusting the '
+        'first', () {
+      IdentifiedMatch m(String title) => IdentifiedMatch(
+            title: title,
+            source: 'test',
+            url: 'https://example.com/${title.hashCode}',
+            sourceTag: 'serpapi',
+          );
+      // One junk tee listing first, nine hoodie listings after: the vote
+      // must land on hoodie (old behavior took the first title's tee).
+      final matches = [
+        m('Men\'s Graphic Tee'),
+        for (var i = 0; i < 9; i++) m('Fleece hoodie $i'),
+      ];
+      expect(IdentificationPipeline.subtypeFromMatches(matches), 'hoodie');
+      // No hits at all -> null.
+      expect(IdentificationPipeline.subtypeFromMatches([m('Summer sale')]),
+          isNull);
+      expect(IdentificationPipeline.subtypeFromMatches(const []), isNull);
     });
 
     test('layerTypeFromSubtype maps the layering vocabulary', () {
